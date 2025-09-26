@@ -435,10 +435,26 @@ class CaptureController {
 
       // Trim and clean the OCR result
       const cleanedText = this.app.cleanOcrResult(text);
+      const lower = (cleanedText || '').trim().toLowerCase();
 
-      const noTextPatterns = ['no text', 'no text detected', 'no text found', 'no visible text', 'no readable text'];
-      if (!cleanedText || noTextPatterns.some(p => cleanedText.toLowerCase().includes(p))) {
-        this.ui.setStatus('No text detected', 'warning');
+      // Use configurable no-text patterns from config (case-insensitive)
+      const cfg = window.GeminiConfig || {};
+      const patterns = Array.isArray(cfg.noTextPatterns) && cfg.noTextPatterns.length
+        ? cfg.noTextPatterns
+        : ['no text','no text detected','no text visible','no readable text','no text found','no text in the image','no visible text','image blur','blurred','blurry','too blurry','no text detect and image blur'];
+
+      const isNoText = !lower || patterns.some(p => lower.includes(String(p).toLowerCase()));
+      const blurPhrase = 'no text detect and image blur';
+
+      if (isNoText) {
+        // If model followed instruction to return the canonical blur message, show it to user
+        if (lower === blurPhrase) {
+          const confidence = U.confidenceHeuristic(cleanedText, meta);
+          this.ui.addResult(blurPhrase, confidence);
+          this.ui.setStatus('Image blur', 'warning');
+        } else {
+          this.ui.setStatus('No text detected', 'warning');
+        }
         return;
       }
 

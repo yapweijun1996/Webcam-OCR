@@ -1,23 +1,11 @@
 /**
- * OCR JSON-Only Config (Gemini/Gemma friendly)
- * Exposes: window.GeminiConfig
- * Note: your "Gemini" name is fine, but model is Gemma (gemma-3-27b-it).
- */
+  * OCR Text-Only Config (Gemini 2.5 Flash)
+  * Exposes: window.GeminiConfig
+  */
 
 window.GeminiConfig = {
   // Available models
   models: {
-    'gemma-3-27b-it': {
-      name: 'gemma-3-27b-it',
-      displayName: 'Gemma 3 27B (Advanced OCR)',
-      temperature: 0,
-      maxOutputTokens: 1024,
-      topP: 0.8,
-      topK: 40,
-      apiEndpoint: 'generateContent',
-      supportsStreaming: false,
-      description: 'High accuracy model for complex text recognition'
-    },
     'gemini-2.5-flash-lite': {
       name: 'gemini-2.5-flash-lite',
       displayName: 'Gemini 2.5 Flash Lite (Fast)',
@@ -64,7 +52,9 @@ window.GeminiConfig = {
       '- Normalize multiple spaces to single; keep original line breaks using real newline characters.',
       '- Do not invent or add any text that is not actually visible.',
       '- Ignore drawings, illustrations, and non-text elements.',
-      '- If nothing is readable, respond with an empty string.'
+      '- If any character is uncertain or ambiguous, OMIT it; never guess or fabricate.',
+      '- If the image is blurred, low-resolution, over-exposed, under-exposed, out-of-focus, or otherwise unreadable: respond EXACTLY with: no text detect and image blur',
+      '- If nothing is readable after omitting uncertain parts: respond EXACTLY with: no text detect and image blur'
     ].join('\n')
   },
 
@@ -83,7 +73,12 @@ window.GeminiConfig = {
     'no readable text',
     'no text found',
     'no text in the image',
-    'no visible text'
+    'no visible text',
+    'image blur',
+    'blurred',
+    'blurry',
+    'too blurry',
+    'no text detect and image blur'
   ],
 
   /**
