@@ -5,27 +5,54 @@
  */
 
 window.GeminiConfig = {
-  model: {
-    name: 'gemma-3-27b-it',
-    temperature: 0,          // make outputs deterministic
-    maxOutputTokens: 1024,
-    topP: 0.8,
-    topK: 40,
-    // If your client supports it, this strongly helps:
-    // response_mime_type: 'application/json'
+  // Available models
+  models: {
+    'gemma-3-27b-it': {
+      name: 'gemma-3-27b-it',
+      displayName: 'Gemma 3 27B (Advanced OCR)',
+      temperature: 0,
+      maxOutputTokens: 1024,
+      topP: 0.8,
+      topK: 40,
+      apiEndpoint: 'generateContent',
+      supportsStreaming: false,
+      description: 'High accuracy model for complex text recognition'
+    },
+    'gemini-flash-lite-latest': {
+      name: 'gemini-flash-lite-latest',
+      displayName: 'Gemini Flash Lite (Fast)',
+      temperature: 0,
+      maxOutputTokens: 1024,
+      topP: 0.8,
+      topK: 40,
+      apiEndpoint: 'streamGenerateContent',
+      supportsStreaming: true,
+      description: 'Fast model optimized for speed and efficiency'
+    }
+  },
+
+  // Default model
+  defaultModel: 'gemini-flash-lite-latest',
+
+  // Get current model config
+  getCurrentModel: function() {
+    return this.models[this.defaultModel];
   },
 
   prompts: {
     /** A) Single string */
     jsonText: [
-      'You are an OCR extractor.',
-      'Output VALID JSON ONLY. No explanations, no markdown, no code fences.',
-      'If nothing is readable, return {"text": ""}.',
+      'You are an OCR text extractor. Your ONLY task is to extract readable text from images.',
+      'Output VALID JSON ONLY. No explanations, no descriptions, no markdown, no code fences.',
+      'If no text is found, return {"text": ""}.',
+      'IMPORTANT: Do not describe the image, do not identify objects, do not analyze content.',
+      'IMPORTANT: Only extract actual text characters that appear in the image.',
       'Rules:',
       '- UTF-8 JSON, no trailing commas.',
-      '- Preserve characters; do not translate.',
+      '- Preserve characters exactly as they appear; do not translate.',
       '- Normalize multiple spaces to single; keep line breaks as \\n.',
-      '- Do not invent text.',
+      '- Do not invent or add any text that is not actually visible.',
+      '- Ignore drawings, illustrations, and non-text elements.',
       'Return exactly this schema:',
       '{"text":"string"}'
     ].join('\n'),

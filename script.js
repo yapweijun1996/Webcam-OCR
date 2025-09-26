@@ -30,6 +30,8 @@ class WebcamOCR {
         // Options
         this.showPreviewCheckbox = document.getElementById('showPreview');
         this.captureModeInputs = document.querySelectorAll('input[name="captureMode"]');
+        this.modelSelect = document.getElementById('modelSelect');
+        this.modelInfo = document.getElementById('modelInfo');
         this.getCaptureMode = () => {
             const el = document.querySelector('input[name="captureMode"]:checked');
             return el ? el.value : 'interval';
@@ -94,6 +96,14 @@ class WebcamOCR {
                 }
             });
         });
+
+        // Model selection events
+        this.modelSelect.addEventListener('change', () => {
+            this.updateModelInfo();
+        });
+
+        // Initialize model info
+        this.updateModelInfo();
 
         // Keyboard shortcuts
         document.addEventListener('keydown', (e) => {
@@ -284,16 +294,12 @@ class WebcamOCR {
             // Convert image to base64
             const imageBase64 = this.extractBase64FromDataUrl(imageData);
 
-            // Prepare request for Gemini Vision API (use external config when present)
+            // Get current model configuration
+            const currentModel = this.getCurrentModel();
             const CFG = (typeof window !== 'undefined' && window.GeminiConfig) ? window.GeminiConfig : {};
-            const promptText = CFG.prompts?.jsonText || CFG.prompts?.invoice || CFG.prompts?.default || 'Extract all text from this image. Return only the text content without any additional formatting or explanation.';
-            const generationConfig = {
-                temperature: CFG.model?.temperature ?? 0.1,
-                maxOutputTokens: CFG.model?.maxOutputTokens ?? 1024,
-                ...(CFG.model?.topP ? { topP: CFG.model.topP } : {}),
-                ...(CFG.model?.topK ? { topK: CFG.model.topK } : {})
-            };
-    
+            const promptText = CFG.prompts?.jsonText || 'Extract all text from this image. Return only the text content without any additional formatting or explanation.';
+
+            // Prepare request for Gemini Vision API
             const requestData = {
                 contents: [
                     {
@@ -309,12 +315,21 @@ class WebcamOCR {
                         ]
                     }
                 ],
-                generationConfig
+                generationConfig: {
+                    temperature: currentModel.temperature ?? 0.1,
+                    maxOutputTokens: currentModel.maxOutputTokens ?? 1024,
+                    topP: currentModel.topP ?? 0.8,
+                    topK: currentModel.topK ?? 40,
+                    thinkingConfig: {
+                        thinkingBudget: 0
+                    }
+                }
             };
-    
-            // Make API call to Gemini with configurable retries and backoff
-            const modelName = CFG.model?.name || 'gemma-3-27b-it';
-            const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
+
+            // Make API call to Gemini with model-specific endpoint
+            const modelName = currentModel.name;
+            const apiEndpoint = currentModel.apiEndpoint || 'generateContent';
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:${apiEndpoint}?key=${apiKey}`;
             const maxRetries = (CFG.rateLimit?.maxRetries ?? 1);
             const baseDelay = (CFG.rateLimit?.retryDelay ?? 5000);
             const backoff = (CFG.rateLimit?.backoffMultiplier ?? 1);
@@ -322,15 +337,20 @@ class WebcamOCR {
             let attempt = 0;
             let response;
             let lastErrorData = null;
-    
+
             while (attempt <= maxRetries) {
-                response = await fetch(url, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(requestData)
-                });
-    
-                if (response.ok) break;
+                try {
+                    response = await fetch(url, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(requestData)
+                    });
+
+                    if (response.ok) break;
+                } catch (fetchError) {
+                    console.error('Fetch error:', fetchError);
+                    throw new Error(`Network error: ${fetchError.message}`);
+                }
     
                 // Attempt to parse error body if possible
                 try {
@@ -364,19 +384,61 @@ class WebcamOCR {
                 throw new Error(`API error after retries: ${lastErrorData?.error?.message || response?.statusText || 'Unknown error'}`);
             }
     
-            const result = await response.json();
-            console.log('Raw API response:', result);
+            let result;
+            let extractedText = '';
 
-            // Parse JSON response using config validator
-            let extractedText = result.candidates?.[0]?.content?.parts?.[0]?.text || '';
+            // Handle streaming vs non-streaming responses
+            if (currentModel.supportsStreaming) {
+                // Handle streaming response
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
 
-            // Fallback: try to extract text from the response in different ways
-            if (!extractedText && result.candidates?.[0]?.content?.parts?.[0]) {
-                const part = result.candidates[0].content.parts[0];
-                if (typeof part === 'string') {
-                    extractedText = part;
-                } else if (part.text) {
-                    extractedText = part.text;
+                try {
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+
+                        buffer += decoder.decode(value, { stream: true });
+                        const lines = buffer.split('\n');
+
+                        // Process complete lines
+                        for (let i = 0; i < lines.length - 1; i++) {
+                            const line = lines[i].trim();
+                            if (line.startsWith('data: ')) {
+                                try {
+                                    const data = JSON.parse(line.slice(6));
+                                    if (data.candidates?.[0]?.content?.parts?.[0]?.text) {
+                                        extractedText += data.candidates[0].content.parts[0].text;
+                                    }
+                                } catch (e) {
+                                    // Ignore parsing errors for incomplete chunks
+                                }
+                            }
+                        }
+
+                        // Keep incomplete line in buffer
+                        buffer = lines[lines.length - 1];
+                    }
+                } finally {
+                    reader.releaseLock();
+                }
+            } else {
+                // Handle regular response
+                result = await response.json();
+                console.log('Raw API response:', result);
+
+                // Parse JSON response
+                extractedText = result.candidates?.[0]?.content?.parts?.[0]?.text || '';
+
+                // Fallback: try to extract text from the response in different ways
+                if (!extractedText && result.candidates?.[0]?.content?.parts?.[0]) {
+                    const part = result.candidates[0].content.parts[0];
+                    if (typeof part === 'string') {
+                        extractedText = part;
+                    } else if (part.text) {
+                        extractedText = part.text;
+                    }
                 }
             }
 
@@ -384,24 +446,22 @@ class WebcamOCR {
             console.log('Extracted text:', extractedText);
             console.log('Text length:', extractedText.length);
 
-            // Check if text matches "no text" patterns
-            const config = (typeof window !== 'undefined' && window.GeminiConfig) ? window.GeminiConfig : {};
-            const noTextPatterns = config.noTextPatterns || [
+            // Check for empty text or "no text" responses
+            const noTextResponses = [
                 'no text',
                 'no text detected',
-                'no text visible',
-                'no readable text',
                 'no text found',
                 'no text in the image',
-                'no visible text'
+                'no visible text',
+                'there is no text',
+                'no readable text'
             ];
 
-            const isNoText = noTextPatterns.some(pattern =>
+            const isNoText = noTextResponses.some(pattern =>
                 extractedText.toLowerCase().includes(pattern.toLowerCase())
             );
 
             if (!extractedText.trim() || isNoText) {
-                // No text detected or "no text" response - silently skip without showing result
                 console.log('Filtering out no-text response:', extractedText.substring(0, 50) + '...');
                 this.updateStatus('No text detected', 'warning');
                 return;
@@ -535,6 +595,21 @@ class WebcamOCR {
             this.startBtn.textContent = 'Start Camera';
             this.startBtn.classList.remove('btn-success');
         }
+    }
+
+    updateModelInfo() {
+        const selectedModel = this.modelSelect.value;
+        const config = (typeof window !== 'undefined' && window.GeminiConfig) ? window.GeminiConfig : {};
+        const modelInfo = config.models?.[selectedModel];
+
+        if (modelInfo) {
+            this.modelInfo.textContent = modelInfo.description || 'Model description not available';
+        }
+    }
+
+    getCurrentModel() {
+        const config = (typeof window !== 'undefined' && window.GeminiConfig) ? window.GeminiConfig : {};
+        return config.models?.[this.modelSelect.value] || config.getCurrentModel();
     }
 
     detectMobile() {

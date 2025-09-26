@@ -66,6 +66,16 @@
                         <span class="option-label">Show capture preview</span>
                     </label>
                 </div>
+
+                <!-- Model Selection -->
+                <div class="model-selection">
+                    <label for="modelSelect">AI Model:</label>
+                    <select id="modelSelect" class="model-select">
+                        <option value="gemini-flash-lite-latest">Gemini Flash Lite (Fast)</option>
+                        <option value="gemma-3-27b-it">Gemma 3 27B (Advanced OCR)</option>
+                    </select>
+                    <div class="model-info" id="modelInfo">Fast model optimized for speed and efficiency</div>
+                </div>
             </section>
 
             <!-- Results Section -->
