@@ -48,7 +48,6 @@ class UIManager {
       statusDot: document.querySelector('#statusIndicator .status-dot'),
       statusText: document.querySelector('#statusIndicator .status-text'),
       start: document.getElementById('startBtn'),
-      capture: document.getElementById('captureBtn'),
       stop: document.getElementById('stopBtn'),
       clear: document.getElementById('clearBtn'),
       results: document.getElementById('resultsList'),
@@ -62,6 +61,7 @@ class UIManager {
       debugStream: document.getElementById('debugStream'),
       debugVideoSize: document.getElementById('debugVideoSize'),
       topLoader: document.getElementById('topLoader'),
+      footer: document.querySelector('.app-footer p'),
     };
   }
 
@@ -83,9 +83,8 @@ class UIManager {
   }
 
   setButtons(cameraActive) {
-    if (!this.el.start || !this.el.capture || !this.el.stop) return;
+    if (!this.el.start || !this.el.stop) return;
     this.el.start.disabled = cameraActive;
-    this.el.capture.disabled = !cameraActive;
     this.el.stop.disabled = !cameraActive;
     this.el.start.textContent = cameraActive ? 'Camera Active' : 'Start Camera';
     this.el.start.classList.toggle('btn-success', cameraActive);
@@ -155,11 +154,23 @@ class UIManager {
     try {
       const cfg = window.GeminiConfig || {};
       const selected = this.el.modelSelect?.value || cfg.defaultModel;
-      const info = cfg.models?.[selected]?.description || 'Model description not available';
+      const model = cfg.models?.[selected];
+      const info = model?.description || 'Model description not available';
       if (this.el.modelInfo) this.el.modelInfo.textContent = info;
+      this.updateFooter(model);
     } catch {
       if (this.el.modelInfo) this.el.modelInfo.textContent = 'Model description not available';
+      this.updateFooter(null);
     }
+  }
+
+  updateFooter(model) {
+   if (!this.el.footer) return;
+   const modelName = model?.displayName || model?.name || 'AI';
+   const baseText = `Powered by ${modelName} | Real-time OCR System`;
+   const version = 'v1.2.0'; // Or get from a config
+   const platform = U.isMobile() ? 'Mobile' : 'Desktop';
+   this.el.footer.textContent = `${baseText} | ${version} | ${platform}`;
   }
 
   updateDebug({ streamActive, videoWidth, videoHeight }) {
@@ -490,7 +501,6 @@ class App {
   bindEvents() {
     // Buttons
     this.ui.el.start?.addEventListener('click', () => this.camera.start());
-    this.ui.el.capture?.addEventListener('click', () => this.capture.captureOnce(true));
     this.ui.el.stop?.addEventListener('click', () => {
       this.capture.stop();
       this.camera.stop();
@@ -511,7 +521,6 @@ class App {
 
     // Keyboard shortcuts
     document.addEventListener('keydown', (e) => {
-      if (e.key === ' ') { e.preventDefault(); this.capture.captureOnce(true); }
       if (e.key === 'Escape') { this.capture.stop(); this.camera.stop(); }
     });
 
@@ -595,10 +604,6 @@ class App {
 /* ========== Bootstrap ========== */
 document.addEventListener('DOMContentLoaded', () => {
   const app = new App();
-  // footer version info
-  const footer = document.querySelector('.app-footer p');
-  if (footer) footer.textContent += ` | v1.1.0 | ${navigator.userAgent.includes('Mobile') ? 'Mobile' : 'Desktop'}`;
-
   // Expose in dev
   if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
     window.webcamOCR = app;
