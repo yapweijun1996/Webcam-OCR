@@ -18,21 +18,35 @@ window.GeminiConfig = {
       supportsStreaming: false,
       description: 'High accuracy model for complex text recognition'
     },
-    'gemini-flash-lite-latest': {
-      name: 'gemini-flash-lite-latest',
-      displayName: 'Gemini Flash Lite (Fast)',
+    'gemini-2.5-flash-lite': {
+      name: 'gemini-2.5-flash-lite',
+      displayName: 'Gemini 2.5 Flash Lite (Fast)',
       temperature: 0,
       maxOutputTokens: 1024,
       topP: 0.8,
       topK: 40,
-      apiEndpoint: 'streamGenerateContent',
-      supportsStreaming: true,
+      apiEndpoint: 'generateContent',
+      supportsStreaming: false,
       description: 'Fast model optimized for speed and efficiency'
+    },
+    'gemini-2.5-flash': {
+      name: 'gemini-2.5-flash',
+      displayName: 'Gemini 2.5 Flash',
+      temperature: 0,
+      maxOutputTokens: 1024,
+      topP: 0.8,
+      topK: 40,
+      apiEndpoint: 'generateContent',
+      supportsStreaming: false,
+      description: 'A slightly more powerful flash model.',
+      thinkingConfig: {
+        thinkingBudget: 512
+      }
     }
   },
 
   // Default model
-  defaultModel: 'gemini-flash-lite-latest',
+  defaultModel: 'gemini-2.5-flash-lite',
 
   // Get current model config
   getCurrentModel: function() {

@@ -51,8 +51,6 @@ class UIManager {
       capture: document.getElementById('captureBtn'),
       stop: document.getElementById('stopBtn'),
       clear: document.getElementById('clearBtn'),
-      test: document.getElementById('testBtn'),
-      showPreview: document.getElementById('showPreview'),
       results: document.getElementById('resultsList'),
       processing: document.getElementById('processingIndicator'),
       errorBox: document.getElementById('errorMessage'),
@@ -269,6 +267,17 @@ class OCRService {
   }
 
   buildRequest(imageBase64, promptText, model) {
+    const generationConfig = {
+      temperature: model.temperature ?? 0.1,
+      maxOutputTokens: model.maxOutputTokens ?? 1024,
+      topP: model.topP ?? 0.8,
+      topK: model.topK ?? 40
+    };
+
+    if (model.thinkingConfig) {
+      generationConfig.thinkingConfig = model.thinkingConfig;
+    }
+
     return {
       contents: [{
         role: 'user',
@@ -277,12 +286,7 @@ class OCRService {
           { inline_data: { mime_type: 'image/jpeg', data: imageBase64 } }
         ]
       }],
-      generationConfig: {
-        temperature: model.temperature ?? 0.1,
-        maxOutputTokens: model.maxOutputTokens ?? 1024,
-        topP: model.topP ?? 0.8,
-        topK: model.topK ?? 40
-      }
+      generationConfig: generationConfig
     };
   }
 
@@ -409,9 +413,6 @@ class CaptureController {
 
     const dataUrl = this.camera.captureJpeg(0.8);
     if (!dataUrl) return;
-    if (this.ui.el.showPreview?.checked) {
-      // preview hook: can be implemented if needed
-    }
 
     try {
       this.ui.showLoading(true);
@@ -495,7 +496,6 @@ class App {
       this.camera.stop();
     });
     this.ui.el.clear?.addEventListener('click', () => this.ui.clearResults());
-    this.ui.el.test?.addEventListener('click', () => this.ui.addResult('Test OCR Result - Display is working!', 0.95));
 
     // Capture mode
     document.querySelectorAll('input[name="captureMode"]').forEach(radio => {

@@ -44,7 +44,8 @@
                     <div class="control-group">
                         <label for="modelSelect">AI Model</label>
                         <select id="modelSelect">
-                            <option value="gemini-flash-lite-latest">Gemini Flash Lite (Fast)</option>
+                            <option value="gemini-2.5-flash-lite">Gemini 2.5 Flash Lite (Fast)</option>
+                            <option value="gemini-2.5-flash">Gemini 2.5 Flash</option>
                             <option value="gemma-3-27b-it">Gemma 3 27B (Advanced)</option>
                         </select>
                     </div>
@@ -57,9 +58,6 @@
                         </div>
                     </div>
 
-                    <div class="control-group">
-                        <label><input type="checkbox" id="showPreview" checked> Show Preview</label>
-                    </div>
                 </div>
 
                 <!-- Debug Info (collapsible) -->
@@ -80,7 +78,6 @@
                 <div class="results-header">
                     <h2>OCR Results</h2>
                     <button id="clearBtn" class="btn btn-outline">Clear</button>
-                    <button id="testBtn" class="btn btn-outline" style="margin-left: 10px;">Test Display</button>
                 </div>
 
                 <div class="results-container">
