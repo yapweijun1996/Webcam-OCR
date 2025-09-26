@@ -51,10 +51,16 @@
                 </div>
 
                 <div class="control-options">
-                    <label class="option-group">
-                        <input type="checkbox" id="autoCapture" checked>
-                        <span class="option-label">Auto-capture every 1s</span>
-                    </label>
+                    <div class="option-group">
+                        <label>
+                            <input type="radio" name="captureMode" id="modeInterval" value="interval" checked>
+                            <span class="option-label">Auto-capture every 1s</span>
+                        </label>
+                        <label>
+                            <input type="radio" name="captureMode" id="modeAsync" value="async">
+                            <span class="option-label">Async Capture OCR</span>
+                        </label>
+                    </div>
                     <label class="option-group">
                         <input type="checkbox" id="showPreview" checked>
                         <span class="option-label">Show capture preview</span>

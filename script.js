@@ -26,8 +26,12 @@ class WebcamOCR {
         this.clearBtn = document.getElementById('clearBtn');
 
         // Options
-        this.autoCaptureCheckbox = document.getElementById('autoCapture');
         this.showPreviewCheckbox = document.getElementById('showPreview');
+        this.captureModeInputs = document.querySelectorAll('input[name="captureMode"]');
+        this.getCaptureMode = () => {
+            const el = document.querySelector('input[name="captureMode"]:checked');
+            return el ? el.value : 'interval';
+        };
 
         // Results
         this.resultsList = document.getElementById('resultsList');
@@ -37,9 +41,12 @@ class WebcamOCR {
         this.initializeEventListeners();
         this.autoStartCamera();
 
-        // Ensure auto-capture starts if checkbox is already checked
-        if (this.autoCaptureCheckbox && this.autoCaptureCheckbox.checked && !this.autoCaptureInterval) {
-            this.startAutoCapture();
+        // Ensure auto-capture starts based on selected mode
+        if (!this.autoCaptureInterval && !this.asyncRunning) {
+            const mode = this.getCaptureMode();
+            if (mode === 'interval' || mode === 'async') {
+                this.startAutoCapture();
+            }
         }
     }
 
@@ -49,11 +56,8 @@ class WebcamOCR {
             await this.startCamera();
 
             // Auto-enable auto-capture immediately (no delay)
-            // Check if auto-capture is not already running
-            if (!this.autoCaptureInterval) {
-                if (this.autoCaptureCheckbox && !this.autoCaptureCheckbox.checked) {
-                    this.autoCaptureCheckbox.checked = true;
-                }
+            // Start capture according to selected mode if not already running
+            if (!this.autoCaptureInterval && !this.asyncRunning) {
                 this.startAutoCapture();
             }
 
@@ -71,13 +75,15 @@ class WebcamOCR {
         this.stopBtn.addEventListener('click', () => this.stopCamera());
         this.clearBtn.addEventListener('click', () => this.clearResults());
 
-        // Checkbox events
-        this.autoCaptureCheckbox.addEventListener('change', (e) => {
-            if (e.target.checked) {
-                this.startAutoCapture();
-            } else {
+        // Capture mode radio events
+        this.captureModeInputs.forEach(inp => {
+            inp.addEventListener('change', () => {
+                // Restart capture according to new mode
                 this.stopAutoCapture();
-            }
+                if (this.stream && (this.getCaptureMode() === 'interval' || this.getCaptureMode() === 'async')) {
+                    this.startAutoCapture();
+                }
+            });
         });
 
         // Keyboard shortcuts
@@ -94,7 +100,7 @@ class WebcamOCR {
         document.addEventListener('visibilitychange', () => {
             if (document.hidden) {
                 this.stopAutoCapture();
-            } else if (this.autoCaptureCheckbox.checked && this.stream) {
+            } else if (this.stream && (this.getCaptureMode() === 'interval' || this.getCaptureMode() === 'async')) {
                 this.startAutoCapture();
             }
         });
@@ -152,13 +158,21 @@ class WebcamOCR {
     }
 
     startAutoCapture() {
-        if (!this.stream || this.autoCaptureInterval) return;
-
-        this.autoCaptureInterval = setInterval(() => {
-            // Send API request every second regardless of processing status
-            this.captureImage();
-        }, 1000); // 1 second
-
+        if (!this.stream) return;
+        const mode = this.getCaptureMode();
+        // Prevent duplicate starts
+        if (mode === 'interval') {
+            if (this.autoCaptureInterval) return;
+            this.stopAsyncCapture();
+            this.autoCaptureInterval = setInterval(() => {
+                // Send API request every second regardless of processing status
+                this.captureImage();
+            }, 1000); // 1 second
+        } else if (mode === 'async') {
+            if (this.asyncRunning) return;
+            this.stopAutoCapture(); // clear interval if any
+            this.startAsyncCapture();
+        }
         this.updateStatus('Auto-capture active', 'success');
     }
 
@@ -167,10 +181,42 @@ class WebcamOCR {
             clearInterval(this.autoCaptureInterval);
             this.autoCaptureInterval = null;
         }
-
+        this.stopAsyncCapture();
         if (this.stream) {
             this.updateStatus('Camera active', 'success');
         }
+    }
+
+    // Async capture loop: capture -> send -> wait for response -> repeat
+    async startAsyncCapture() {
+        if (this.asyncRunning) return;
+        this.asyncRunning = true;
+        while (this.asyncRunning && this.stream) {
+            // respect global throttle
+            if (this.throttleUntil && Date.now() < this.throttleUntil) {
+                const wait = this.throttleUntil - Date.now();
+                await new Promise(r => setTimeout(r, wait));
+                if (!this.asyncRunning) break;
+            }
+            try {
+                // capture frame
+                const canvas = this.captureCanvas;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(this.cameraFeed, 0, 0, canvas.width, canvas.height);
+                const imageData = canvas.toDataURL('image/jpeg', 0.8);
+                if (this.showPreviewCheckbox.checked) this.showCapturePreview(imageData);
+                await this.processOCR(imageData);
+            } catch (e) {
+                console.error('Async capture loop error:', e);
+                // on error, wait 1s before retry to avoid tight loop
+                await new Promise(r => setTimeout(r, 1000));
+            }
+        }
+        this.asyncRunning = false;
+    }
+
+    stopAsyncCapture() {
+        this.asyncRunning = false;
     }
 
     async captureImage() {
@@ -208,7 +254,16 @@ class WebcamOCR {
     async processOCR(imageData) {
         this.showLoading(true);
         this.hideError();
-
+    
+        // Throttle: if previous 429/500 set a cooldown, skip sending new requests until cooldown expires
+        const now = Date.now();
+        if (this.throttleUntil && now < this.throttleUntil) {
+            const remaining = Math.ceil((this.throttleUntil - now) / 1000);
+            this.updateStatus(`Throttled - waiting ${remaining}s`, 'warning');
+            this.showLoading(false);
+            return;
+        }
+    
         try {
             // Get API key from environment variable or prompt user
             const apiKey = this.getApiKey();
@@ -220,15 +275,22 @@ class WebcamOCR {
             // Convert image to base64
             const imageBase64 = this.extractBase64FromDataUrl(imageData);
 
-            // Prepare request for Gemini Vision API
+            // Prepare request for Gemini Vision API (use external config when present)
+            const CFG = (typeof window !== 'undefined' && window.GeminiConfig) ? window.GeminiConfig : {};
+            const promptText = CFG.prompts?.jsonText || CFG.prompts?.invoice || CFG.prompts?.default || 'Extract all text from this image. Return only the text content without any additional formatting or explanation.';
+            const generationConfig = {
+                temperature: CFG.model?.temperature ?? 0.1,
+                maxOutputTokens: CFG.model?.maxOutputTokens ?? 1024,
+                ...(CFG.model?.topP ? { topP: CFG.model.topP } : {}),
+                ...(CFG.model?.topK ? { topK: CFG.model.topK } : {})
+            };
+    
             const requestData = {
                 contents: [
                     {
                         role: 'user',
                         parts: [
-                            {
-                                text: 'Extract all text from this image. Return only the text content without any additional formatting or explanation.'
-                            },
+                            { text: promptText },
                             {
                                 inline_data: {
                                     mime_type: 'image/jpeg',
@@ -238,65 +300,61 @@ class WebcamOCR {
                         ]
                     }
                 ],
-                generationConfig: {
-                    temperature: 0.1,
-                    maxOutputTokens: 1024
-                }
+                generationConfig
             };
-
-            // Make API call to Gemini
-            const response = await fetch(
-                `https://generativelanguage.googleapis.com/v1beta/models/gemma-3-27b-it:generateContent?key=${apiKey}`,
-                {
+    
+            // Make API call to Gemini with configurable retries and backoff
+            const modelName = CFG.model?.name || 'gemma-3-27b-it';
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
+            const maxRetries = (CFG.rateLimit?.maxRetries ?? 1);
+            const baseDelay = (CFG.rateLimit?.retryDelay ?? 5000);
+            const backoff = (CFG.rateLimit?.backoffMultiplier ?? 1);
+    
+            let attempt = 0;
+            let response;
+            let lastErrorData = null;
+    
+            while (attempt <= maxRetries) {
+                response = await fetch(url, {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
+                    headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(requestData)
+                });
+    
+                if (response.ok) break;
+    
+                // Attempt to parse error body if possible
+                try {
+                    lastErrorData = await response.json();
+                } catch (e) {
+                    lastErrorData = null;
                 }
-            );
-
-            if (!response.ok) {
-                const errorData = await response.json();
-
-                // Handle rate limiting (429 errors)
-                if (response.status === 429) {
-                    console.warn('Rate limit hit (429). Waiting 5 seconds before retry...');
-                    this.updateStatus('Rate limited - waiting 5s...', 'warning');
-
-                    // Show loading indicator during wait
+    
+                // If rate limited (429) or server error (500) and we can retry, wait then retry
+                if ((response.status === 429 || response.status === 500) && attempt < maxRetries) {
+                    // Enforce a minimum global throttle of 5s for subsequent captures
+                    this.throttleUntil = Date.now() + 5000;
+    
+                    const waitMs = Math.round(baseDelay * Math.pow(backoff, attempt));
+                    console.warn(`Request failed with status ${response.status}. Waiting ${waitMs}ms before retry...`);
+                    this.updateStatus(`Server busy - waiting ${Math.round(waitMs/1000)}s...`, 'warning');
                     this.showLoading(true);
-
-                    // Wait 5 seconds before continuing
-                    await new Promise(resolve => setTimeout(resolve, 5000));
-
+                    await new Promise(resolve => setTimeout(resolve, waitMs));
                     this.showLoading(false);
-                    this.updateStatus('Retrying after rate limit...', 'warning');
-
-                    // Retry the request once after waiting
-                    const retryResponse = await fetch(
-                        `https://generativelanguage.googleapis.com/v1beta/models/gemma-3-27b-it:generateContent?key=${apiKey}`,
-                        {
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/json',
-                            },
-                            body: JSON.stringify(requestData)
-                        }
-                    );
-
-                    if (!retryResponse.ok) {
-                        throw new Error(`API error after retry: ${errorData.error?.message || retryResponse.statusText}`);
-                    }
-
-                    // Use the retry response instead
-                    const retryResult = await retryResponse.json();
-                    return retryResult;
+                    this.updateStatus('Retrying after wait...', 'warning');
+                    attempt++;
+                    continue;
                 }
-
-                throw new Error(`API error: ${errorData.error?.message || response.statusText}`);
+    
+                // Non-retriable or out of retries -> set throttle and throw
+                this.throttleUntil = Date.now() + 5000;
+                throw new Error(`API error: ${lastErrorData?.error?.message || response.statusText || 'Unknown error'}`);
             }
-
+    
+            if (!response || !response.ok) {
+                throw new Error(`API error after retries: ${lastErrorData?.error?.message || response?.statusText || 'Unknown error'}`);
+            }
+    
             const result = await response.json();
 
             // Extract text from response
