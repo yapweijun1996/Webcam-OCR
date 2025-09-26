@@ -15,7 +15,10 @@ window.GeminiConfig = {
       topK: 40,
       apiEndpoint: 'generateContent',
       supportsStreaming: false,
-      description: 'Fast model optimized for speed and efficiency'
+      description: 'Fast model optimized for speed and efficiency',
+      thinkingConfig: {
+        thinkingBudget: 512
+      }
     },
     'gemini-2.5-flash': {
       name: 'gemini-2.5-flash',
