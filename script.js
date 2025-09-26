@@ -447,10 +447,8 @@ class CaptureController {
       const blurPhrase = 'no text detect and image blur';
 
       if (isNoText) {
-        // If model followed instruction to return the canonical blur message, show it to user
+        // Blur/no-text signals should NOT appear in results list; status only
         if (lower === blurPhrase) {
-          const confidence = U.confidenceHeuristic(cleanedText, meta);
-          this.ui.addResult(blurPhrase, confidence);
           this.ui.setStatus('Image blur', 'warning');
         } else {
           this.ui.setStatus('No text detected', 'warning');
