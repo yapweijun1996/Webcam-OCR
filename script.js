@@ -40,6 +40,12 @@ class WebcamOCR {
         this.processingIndicator = document.getElementById('processingIndicator');
         this.errorMessage = document.getElementById('errorMessage');
 
+        // Debug: Check if elements exist
+        console.log('DOM Elements found:');
+        console.log('resultsList:', this.resultsList);
+        console.log('processingIndicator:', this.processingIndicator);
+        console.log('errorMessage:', this.errorMessage);
+
         this.initializeEventListeners();
         this.autoStartCamera();
 
@@ -359,13 +365,44 @@ class WebcamOCR {
             }
     
             const result = await response.json();
+            console.log('Raw API response:', result);
 
             // Parse JSON response using config validator
-            const parsed = CFG.validator?.parseOrEmpty(result.candidates?.[0]?.content?.parts?.[0]?.text || '', 'text');
-            const extractedText = parsed?.text || '';
+            let extractedText = result.candidates?.[0]?.content?.parts?.[0]?.text || '';
 
-            if (!extractedText.trim()) {
-                // No text detected - silently skip without showing error or result
+            // Fallback: try to extract text from the response in different ways
+            if (!extractedText && result.candidates?.[0]?.content?.parts?.[0]) {
+                const part = result.candidates[0].content.parts[0];
+                if (typeof part === 'string') {
+                    extractedText = part;
+                } else if (part.text) {
+                    extractedText = part.text;
+                }
+            }
+
+            console.log('Raw API response:', result);
+            console.log('Extracted text:', extractedText);
+            console.log('Text length:', extractedText.length);
+
+            // Check if text matches "no text" patterns
+            const config = (typeof window !== 'undefined' && window.GeminiConfig) ? window.GeminiConfig : {};
+            const noTextPatterns = config.noTextPatterns || [
+                'no text',
+                'no text detected',
+                'no text visible',
+                'no readable text',
+                'no text found',
+                'no text in the image',
+                'no visible text'
+            ];
+
+            const isNoText = noTextPatterns.some(pattern =>
+                extractedText.toLowerCase().includes(pattern.toLowerCase())
+            );
+
+            if (!extractedText.trim() || isNoText) {
+                // No text detected or "no text" response - silently skip without showing result
+                console.log('Filtering out no-text response:', extractedText.substring(0, 50) + '...');
                 this.updateStatus('No text detected', 'warning');
                 return;
             }
@@ -375,10 +412,12 @@ class WebcamOCR {
 
             // Display the result
             console.log('OCR Result:', extractedText.trim(), 'Confidence:', confidence);
+            console.log('About to call displayResult...');
             this.displayResult({
                 text: extractedText.trim(),
                 confidence: confidence
             });
+            console.log('displayResult called successfully');
 
             this.updateStatus('OCR completed', 'success');
 
@@ -393,6 +432,14 @@ class WebcamOCR {
     }
 
     displayResult(data) {
+        console.log('displayResult called with:', data);
+
+        // Check if resultsList exists
+        if (!this.resultsList) {
+            console.error('resultsList element not found!');
+            return;
+        }
+
         const resultItem = document.createElement('div');
         resultItem.className = 'result-item';
 
@@ -408,13 +455,20 @@ class WebcamOCR {
             </div>
         `;
 
+        console.log('Created result item:', resultItem);
+        console.log('Results list before insert:', this.resultsList.children.length);
+
         // Add to top of results list
         this.resultsList.insertBefore(resultItem, this.resultsList.firstChild);
+
+        console.log('Results list after insert:', this.resultsList.children.length);
 
         // Limit results to last 10
         while (this.resultsList.children.length > 10) {
             this.resultsList.removeChild(this.resultsList.lastChild);
         }
+
+        console.log('Final results count:', this.resultsList.children.length);
     }
 
     showCapturePreview(imageData) {
