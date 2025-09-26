@@ -357,35 +357,12 @@ class WebcamOCR {
     
             const result = await response.json();
 
-            // Extract text from response
-            const extractedText = result.candidates?.[0]?.content?.parts?.[0]?.text || '';
+            // Parse JSON response using config validator
+            const parsed = CFG.validator?.parseOrEmpty(result.candidates?.[0]?.content?.parts?.[0]?.text || '', 'text');
+            const extractedText = parsed?.text || '';
 
             if (!extractedText.trim()) {
                 // No text detected - silently skip without showing error or result
-                this.updateStatus('No text detected', 'warning');
-                return;
-            }
-
-            // Check if the response indicates no text was found
-            const noTextPatterns = [
-                'there is no text',
-                'no text visible',
-                'no discernible text',
-                'no text detected',
-                'no text found',
-                'no readable text',
-                'no text in the image',
-                'text not found',
-                'no text available'
-            ];
-
-            const lowerText = extractedText.toLowerCase();
-            const hasNoTextResponse = noTextPatterns.some(pattern =>
-                lowerText.includes(pattern)
-            );
-
-            if (hasNoTextResponse) {
-                // API detected no text - silently skip without showing result
                 this.updateStatus('No text detected', 'warning');
                 return;
             }
