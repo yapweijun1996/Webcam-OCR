@@ -8,6 +8,7 @@ class WebcamOCR {
     constructor() {
         this.stream = null;
         this.autoCaptureInterval = null;
+        this.asyncRunning = false;
         this.isProcessing = false;
         this.captureCount = 0;
 
@@ -24,6 +25,7 @@ class WebcamOCR {
         this.captureBtn = document.getElementById('captureBtn');
         this.stopBtn = document.getElementById('stopBtn');
         this.clearBtn = document.getElementById('clearBtn');
+        this.testBtn = document.getElementById('testBtn');
 
         // Options
         this.showPreviewCheckbox = document.getElementById('showPreview');
@@ -74,6 +76,7 @@ class WebcamOCR {
         this.captureBtn.addEventListener('click', () => this.captureImage());
         this.stopBtn.addEventListener('click', () => this.stopCamera());
         this.clearBtn.addEventListener('click', () => this.clearResults());
+        this.testBtn.addEventListener('click', () => this.testDisplay());
 
         // Capture mode radio events
         this.captureModeInputs.forEach(inp => {
@@ -371,6 +374,7 @@ class WebcamOCR {
             const confidence = this.calculateConfidence(extractedText, result);
 
             // Display the result
+            console.log('OCR Result:', extractedText.trim(), 'Confidence:', confidence);
             this.displayResult({
                 text: extractedText.trim(),
                 confidence: confidence
@@ -586,6 +590,16 @@ class WebcamOCR {
                 });
             }, index * 1000);
         });
+    }
+
+    // Test display function - call this from console to verify display works
+    testDisplay() {
+        console.log('Testing display function...');
+        this.displayResult({
+            text: 'Test OCR Result - Display is working!',
+            confidence: 0.95
+        });
+        console.log('Test result should appear in the results list');
     }
 }
 
