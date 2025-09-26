@@ -49,6 +49,7 @@ class WebcamOCR {
         console.log('errorMessage:', this.errorMessage);
 
         this.initializeEventListeners();
+        this.initializeDebugInfo();
         this.autoStartCamera();
 
         // Ensure auto-capture starts based on selected mode
@@ -62,19 +63,43 @@ class WebcamOCR {
 
     async autoStartCamera() {
         try {
+            console.log('Attempting auto-start camera...');
+
+            // Check if already have permission
+            const permissions = await navigator.permissions.query({ name: 'camera' });
+            console.log('Camera permission status:', permissions.state);
+
+            if (permissions.state === 'denied') {
+                console.log('Camera permission denied, will prompt user');
+                this.updateStatus('Click "Start Camera" to begin', 'warning');
+                return;
+            }
+
             // Auto-start camera
             await this.startCamera();
+            console.log('Camera auto-started successfully');
 
-            // Auto-enable auto-capture immediately (no delay)
-            // Start capture according to selected mode if not already running
-            if (!this.autoCaptureInterval && !this.asyncRunning) {
-                this.startAutoCapture();
-            }
+            // Auto-enable auto-capture with a small delay to ensure camera is fully ready
+            setTimeout(() => {
+                if (!this.autoCaptureInterval && !this.asyncRunning && this.stream) {
+                    console.log('Starting auto-capture after camera ready');
+                    this.startAutoCapture();
+                }
+            }, 1000);
 
         } catch (error) {
             console.error('Auto-start camera failed:', error);
-            this.updateStatus('Auto-start failed', 'error');
-            // Don't show error messages in UI - only log to console for debugging
+            this.updateStatus('Click "Start Camera" to begin', 'warning');
+
+            // Provide specific guidance based on error type
+            if (error.name === 'NotAllowedError') {
+                console.log('User needs to grant camera permission');
+            } else if (error.name === 'NotFoundError') {
+                console.log('No camera available - user needs to connect camera');
+                this.updateStatus('No camera detected', 'error');
+            } else {
+                console.log('Camera startup failed - user can retry manually');
+            }
         }
     }
 
@@ -129,38 +154,92 @@ class WebcamOCR {
         try {
             this.updateStatus('Starting camera...', 'warning');
 
-            // Camera constraints - adaptive based on device
+            // Check if camera is already active
+            if (this.stream) {
+                console.log('Camera already active');
+                return;
+            }
+
+            // Check if getUserMedia is supported
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                throw new Error('Camera not supported in this browser');
+            }
+
+            // Camera constraints - more permissive for better compatibility
             const isMobile = this.detectMobile();
             const constraints = {
                 video: {
-                    width: isMobile ? 640 : 1280,
-                    height: isMobile ? 480 : 720,
-                    facingMode: 'environment', // Prefer back camera on mobile
+                    width: { ideal: isMobile ? 640 : 1280, max: 1920 },
+                    height: { ideal: isMobile ? 480 : 720, max: 1080 },
+                    facingMode: 'user', // Use front camera by default for better compatibility
                     frameRate: { ideal: 30, max: 30 }
                 },
                 audio: false
             };
 
-            this.stream = await navigator.mediaDevices.getUserMedia(constraints);
-            this.cameraFeed.srcObject = this.stream;
+            console.log('Requesting camera with constraints:', constraints);
 
-            // Wait for video to be ready
-            await new Promise((resolve) => {
-                this.cameraFeed.onloadedmetadata = resolve;
+            this.stream = await navigator.mediaDevices.getUserMedia(constraints);
+            console.log('Camera stream obtained:', this.stream);
+
+            this.cameraFeed.srcObject = this.stream;
+            console.log('Video element source set');
+
+            // Wait for video to be ready with multiple fallback methods
+            await new Promise((resolve, reject) => {
+                const timeout = setTimeout(() => {
+                    reject(new Error('Camera startup timeout'));
+                }, 10000);
+
+                const onReady = () => {
+                    clearTimeout(timeout);
+                    console.log('Camera ready, dimensions:', this.cameraFeed.videoWidth, 'x', this.cameraFeed.videoHeight);
+                    resolve();
+                };
+
+                if (this.cameraFeed.readyState >= 2) {
+                    onReady();
+                } else {
+                    this.cameraFeed.onloadedmetadata = onReady;
+                    this.cameraFeed.onloadeddata = onReady;
+                    // Fallback: check periodically
+                    const checkReady = () => {
+                        if (this.cameraFeed.readyState >= 2) {
+                            onReady();
+                        } else {
+                            setTimeout(checkReady, 100);
+                        }
+                    };
+                    setTimeout(checkReady, 100);
+                }
             });
 
             // Set canvas size to match video
             this.captureCanvas.width = this.cameraFeed.videoWidth;
             this.captureCanvas.height = this.cameraFeed.videoHeight;
+            console.log('Canvas size set to:', this.captureCanvas.width, 'x', this.captureCanvas.height);
 
             this.updateStatus('Camera active', 'success');
             this.updateButtonStates(true);
+            this.updateDebugInfo();
 
         } catch (error) {
             console.error('Error accessing camera:', error);
-            this.updateStatus('Camera error', 'error');
+            this.updateStatus(`Camera error: ${error.message}`, 'error');
+
+            // Provide helpful error messages
+            if (error.name === 'NotAllowedError') {
+                console.log('Camera permission denied - user needs to grant permission');
+            } else if (error.name === 'NotFoundError') {
+                console.log('No camera found on this device');
+            } else if (error.name === 'NotSupportedError') {
+                console.log('Camera not supported in this browser');
+            } else if (error.name === 'NotReadableError') {
+                console.log('Camera is being used by another application');
+            }
+
             // Don't show error messages in UI - only log to console for debugging
-            // this.showError('Unable to access camera. Please check permissions and try again.');
+            // this.showError(`Camera error: ${error.message}. Please check permissions and try again.`);
         }
     }
 
@@ -174,6 +253,7 @@ class WebcamOCR {
         this.updateStatus('Camera stopped', 'warning');
         this.updateButtonStates(false);
         this.hideCameraOverlay();
+        this.updateDebugInfo();
     }
 
     startAutoCapture() {
@@ -210,28 +290,49 @@ class WebcamOCR {
     async startAsyncCapture() {
         if (this.asyncRunning) return;
         this.asyncRunning = true;
+        console.log('Starting async capture loop');
+
         while (this.asyncRunning && this.stream) {
-            // respect global throttle
-            if (this.throttleUntil && Date.now() < this.throttleUntil) {
-                const wait = this.throttleUntil - Date.now();
-                await new Promise(r => setTimeout(r, wait));
-                if (!this.asyncRunning) break;
-            }
             try {
+                // respect global throttle
+                if (this.throttleUntil && Date.now() < this.throttleUntil) {
+                    const wait = this.throttleUntil - Date.now();
+                    console.log(`Throttled, waiting ${Math.ceil(wait/1000)}s`);
+                    await new Promise(r => setTimeout(r, wait));
+                    if (!this.asyncRunning) break;
+                }
+
                 // capture frame
                 const canvas = this.captureCanvas;
                 const ctx = canvas.getContext('2d');
                 ctx.drawImage(this.cameraFeed, 0, 0, canvas.width, canvas.height);
                 const imageData = canvas.toDataURL('image/jpeg', 0.8);
-                if (this.showPreviewCheckbox.checked) this.showCapturePreview(imageData);
+
+                // show preview if enabled
+                if (this.showPreviewCheckbox.checked) {
+                    this.showCapturePreview(imageData);
+                }
+
+                // process OCR - errors are handled internally
                 await this.processOCR(imageData);
+
+                // wait before next capture
+                await new Promise(r => setTimeout(r, 1000));
+
             } catch (e) {
                 console.error('Async capture loop error:', e);
-                // on error, wait 1s before retry to avoid tight loop
-                await new Promise(r => setTimeout(r, 1000));
+                this.updateStatus('Capture error - retrying...', 'warning');
+
+                // on error, wait longer before retry to avoid tight loop
+                await new Promise(r => setTimeout(r, 3000));
+
+                // if still running, continue the loop
+                if (!this.asyncRunning) break;
             }
         }
+
         this.asyncRunning = false;
+        console.log('Async capture loop stopped');
     }
 
     stopAsyncCapture() {
@@ -273,7 +374,7 @@ class WebcamOCR {
     async processOCR(imageData) {
         this.showLoading(true);
         this.hideError();
-    
+
         // Throttle: if previous 429/500 set a cooldown, skip sending new requests until cooldown expires
         const now = Date.now();
         if (this.throttleUntil && now < this.throttleUntil) {
@@ -282,15 +383,18 @@ class WebcamOCR {
             this.showLoading(false);
             return;
         }
-    
+
+        // Get API key from environment variable or prompt user
+        const apiKey = this.getApiKey();
+        let currentApiKey = null; // Initialize for error logging
+
+        if (!apiKey) {
+            throw new Error('Gemini API key not found. Please set GEMINI_API_KEY environment variable or enter it when prompted.');
+        }
+
+        currentApiKey = apiKey; // Store for error logging
+
         try {
-            // Get API key from environment variable or prompt user
-            const apiKey = this.getApiKey();
-
-            if (!apiKey) {
-                throw new Error('Gemini API key not found. Please set GEMINI_API_KEY.');
-            }
-
             // Convert image to base64
             const imageBase64 = this.extractBase64FromDataUrl(imageData);
 
@@ -298,6 +402,11 @@ class WebcamOCR {
             const currentModel = this.getCurrentModel();
             const CFG = (typeof window !== 'undefined' && window.GeminiConfig) ? window.GeminiConfig : {};
             const promptText = CFG.prompts?.jsonText || 'Extract all text from this image. Return only the text content without any additional formatting or explanation.';
+
+            // Validate currentModel exists
+            if (!currentModel) {
+                throw new Error('No valid model configuration found. Please check your model selection.');
+            }
 
             // Prepare request for Gemini Vision API
             const requestData = {
@@ -483,9 +592,26 @@ class WebcamOCR {
 
         } catch (error) {
             console.error('Error processing OCR:', error);
-            this.updateStatus('OCR error', 'error');
-            // Don't show error messages in UI - only log to console for debugging
-            // this.showError(error.message || 'Failed to process image. Please try again.');
+
+            // Provide specific error messages based on error type
+            let errorMessage = 'OCR processing failed';
+            if (error.message.includes('API key')) {
+                errorMessage = 'API key required - please set GEMINI_API_KEY';
+            } else if (error.message.includes('Network')) {
+                errorMessage = 'Network connection error';
+            } else if (error.message.includes('fetch')) {
+                errorMessage = 'Failed to connect to OCR service';
+            } else if (error.message.includes('429') || error.message.includes('500')) {
+                errorMessage = 'Service temporarily unavailable';
+            }
+
+            this.updateStatus(errorMessage, 'error');
+            console.log('OCR Error details:', {
+                message: error.message,
+                stack: error.stack,
+                apiKey: currentApiKey ? 'Present' : 'Missing',
+                model: currentModel?.name
+            });
         } finally {
             this.showLoading(false);
         }
@@ -598,18 +724,57 @@ class WebcamOCR {
     }
 
     updateModelInfo() {
-        const selectedModel = this.modelSelect.value;
-        const config = (typeof window !== 'undefined' && window.GeminiConfig) ? window.GeminiConfig : {};
-        const modelInfo = config.models?.[selectedModel];
+        try {
+            const selectedModel = this.modelSelect.value;
+            const config = (typeof window !== 'undefined' && window.GeminiConfig) ? window.GeminiConfig : {};
+            const modelInfo = config.models?.[selectedModel];
 
-        if (modelInfo) {
-            this.modelInfo.textContent = modelInfo.description || 'Model description not available';
+            if (modelInfo && modelInfo.description) {
+                this.modelInfo.textContent = modelInfo.description;
+            } else {
+                this.modelInfo.textContent = 'Model description not available';
+            }
+        } catch (error) {
+            console.warn('Error updating model info:', error);
+            this.modelInfo.textContent = 'Model description not available';
         }
     }
 
     getCurrentModel() {
         const config = (typeof window !== 'undefined' && window.GeminiConfig) ? window.GeminiConfig : {};
-        return config.models?.[this.modelSelect.value] || config.getCurrentModel();
+        const selectedModel = this.modelSelect.value;
+        return config.models?.[selectedModel] || config.models?.[config.defaultModel] || null;
+    }
+
+    initializeDebugInfo() {
+        // Show debug info only in development
+        const isDevelopment = window.location.hostname === 'localhost' ||
+                             window.location.hostname === '127.0.0.1' ||
+                             window.location.protocol === 'file:';
+
+        const debugInfo = document.getElementById('debugInfo');
+        if (debugInfo) {
+            debugInfo.style.display = isDevelopment ? 'block' : 'none';
+        }
+
+        if (isDevelopment) {
+            this.updateDebugInfo();
+        }
+    }
+
+    updateDebugInfo() {
+        const debugBrowser = document.getElementById('debugBrowser');
+        const debugHttps = document.getElementById('debugHttps');
+        const debugCameraAPI = document.getElementById('debugCameraAPI');
+        const debugStream = document.getElementById('debugStream');
+        const debugVideoSize = document.getElementById('debugVideoSize');
+
+        if (debugBrowser) debugBrowser.textContent = navigator.userAgent.split(' ').pop();
+        if (debugHttps) debugHttps.textContent = window.location.protocol === 'https:' ? '✅' : '❌';
+        if (debugCameraAPI) debugCameraAPI.textContent = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia) ? '✅' : '❌';
+        if (debugStream) debugStream.textContent = this.stream ? '✅ Active' : '❌ Inactive';
+        if (debugVideoSize) debugVideoSize.textContent = this.stream ?
+            `${this.cameraFeed.videoWidth}x${this.cameraFeed.videoHeight}` : 'N/A';
     }
 
     detectMobile() {
@@ -626,23 +791,27 @@ class WebcamOCR {
     // Get API key from environment variable or user input
     getApiKey() {
         // Try to get from environment variable first
-        if (typeof GEMINI_API_KEY !== 'undefined') {
+        if (typeof GEMINI_API_KEY !== 'undefined' && GEMINI_API_KEY) {
+            console.log('Using API key from environment variable');
             return GEMINI_API_KEY;
         }
 
         // Try to get from localStorage
         const storedKey = localStorage.getItem('gemini_api_key');
         if (storedKey) {
+            console.log('Using API key from localStorage');
             return storedKey;
         }
 
-        // Prompt user for API key
-        const userKey = prompt('Please enter your Gemini API key:');
-        if (userKey) {
-            localStorage.setItem('gemini_api_key', userKey);
-            return userKey;
+        // Prompt user for API key with helpful message
+        const userKey = prompt('Please enter your Gemini API key from Google AI Studio (https://aistudio.google.com/):');
+        if (userKey && userKey.trim()) {
+            localStorage.setItem('gemini_api_key', userKey.trim());
+            console.log('API key saved to localStorage');
+            return userKey.trim();
         }
 
+        console.log('No API key provided');
         return null;
     }
 

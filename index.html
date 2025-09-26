@@ -50,6 +50,20 @@
                     </button>
                 </div>
 
+                <!-- Debug Info (only show in development) -->
+                <div class="debug-info" id="debugInfo" style="display: none;">
+                    <details>
+                        <summary>Debug Information</summary>
+                        <div class="debug-content">
+                            <p><strong>Browser:</strong> <span id="debugBrowser"></span></p>
+                            <p><strong>HTTPS:</strong> <span id="debugHttps"></span></p>
+                            <p><strong>Camera API:</strong> <span id="debugCameraAPI"></span></p>
+                            <p><strong>Stream Status:</strong> <span id="debugStream"></span></p>
+                            <p><strong>Video Dimensions:</strong> <span id="debugVideoSize"></span></p>
+                        </div>
+                    </details>
+                </div>
+
                 <div class="control-options">
                     <div class="option-group">
                         <label>

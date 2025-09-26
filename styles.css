@@ -267,6 +267,41 @@ body {
   line-height: 1.4;
 }
 
+/* Debug Info */
+.debug-info {
+  margin-top: var(--space-md);
+  padding: var(--space-md);
+  background: var(--surface-elevated);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+}
+
+.debug-info details {
+  font-size: var(--font-size-sm);
+}
+
+.debug-info summary {
+  cursor: pointer;
+  font-weight: 500;
+  color: var(--text);
+  padding: var(--space-xs);
+  margin-bottom: var(--space-sm);
+}
+
+.debug-info summary:hover {
+  color: var(--primary);
+}
+
+.debug-content p {
+  margin: var(--space-xs) 0;
+  color: var(--text-secondary);
+}
+
+.debug-content span {
+  color: var(--text);
+  font-weight: 500;
+}
+
 /* Results Section */
 .results-section {
   display: flex;
