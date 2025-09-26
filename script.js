@@ -320,8 +320,8 @@ class OCRService {
 
     const CFG = window.GeminiConfig || {};
     const promptText =
-      CFG.prompts?.jsonText ||
-      'Extract all text from this image. Return only the text content without additional formatting.';
+      (CFG.prompts?.textOnly && String(CFG.prompts.textOnly).trim()) ||
+      'Extract ONLY the visible text from the image. Respond with TEXT ONLY, no JSON, no markdown, no code fences, no explanations.';
 
     const req = this.buildRequest(imageBase64, promptText, model);
     const rawEndpoint = model.apiEndpoint || 'generateContent';
@@ -340,7 +340,7 @@ class OCRService {
       try {
         response = await fetch(url, {
           method: 'POST',
-          headers: { 'Content-Type': 'text/plain' },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(req)
         });
         if (response.ok) break;

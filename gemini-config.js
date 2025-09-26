@@ -54,51 +54,17 @@ window.GeminiConfig = {
   },
 
   prompts: {
-    /** A) Single string */
-    jsonText: [
-      'You are an OCR text extractor. Your ONLY task is to extract readable text from images.',
-      'Output VALID JSON ONLY. No explanations, no descriptions, no markdown, no code fences.',
-      'If no text is found, return "{"text": ""}."',
-      'IMPORTANT: Do not describe the image, do not identify objects, do not analyze content.',
-      'IMPORTANT: Only extract actual text characters that appear in the image.',
+    /** Text-only output (no JSON) */
+    textOnly: [
+      'You are an OCR text extractor. Extract ONLY the visible text from the image.',
+      'Respond with TEXT ONLY: no JSON, no markdown, no code fences, no explanations.',
+      'Do NOT describe the image, do NOT identify objects, do NOT analyze content.',
       'Rules:',
-      '- UTF-8 JSON, no trailing commas.',
       '- Preserve characters exactly as they appear; do not translate.',
-      '- Normalize multiple spaces to single; keep line breaks as \\n.',
+      '- Normalize multiple spaces to single; keep original line breaks using real newline characters.',
       '- Do not invent or add any text that is not actually visible.',
       '- Ignore drawings, illustrations, and non-text elements.',
-      'Return exactly this schema:',
-      '{"text":"string"}'
-    ].join('\n'),
-
-    /** B) Lines array (simplest structure) */
-    jsonLines: [
-      'You are an OCR extractor.',
-      'Output VALID JSON ONLY. No explanations, no markdown, no code fences.',
-      'If nothing is readable, return {"lines":[]}.',
-      'Rules:',
-      '- UTF-8 JSON, no trailing commas.',
-      '- Preserve characters; do not translate.',
-      '- Reading order: left-to-right, top-to-bottom.',
-      '- Each line is one entry; do not merge unrelated lines.',
-      '- Do not invent text.',
-      'Return exactly this schema:',
-      '{"lines":["string","string","..."]}'
-    ].join('\n'),
-
-    /** C) Multi-image/pages (supply page_id yourself) */
-    jsonPages: [
-      'You are an OCR extractor.',
-      'Output VALID JSON ONLY. No explanations, no markdown, no code fences.',
-      'If nothing is readable, return {"pages":[]}.',
-      'Rules:',
-      '- UTF-8 JSON, no trailing commas.',
-      '- Preserve characters; do not translate.',
-      '- For each image/page, return one object with page_id and its text.',
-      '- Use \\n for line breaks inside "text".',
-      '- Do not invent text.',
-      'Return exactly this schema:',
-      '{"pages":[{"page_id":"string","text":"string"}]}'
+      '- If nothing is readable, respond with an empty string.'
     ].join('\n')
   },
 
