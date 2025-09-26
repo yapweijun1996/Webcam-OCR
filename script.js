@@ -1,1007 +1,611 @@
 /**
- * Webcam OCR - Real-time Text Recognition
- * Uses Gemma-3-27B-IT model for OCR processing
- * Vanilla JavaScript implementation
+ * Webcam OCR - Refactored, Modular, Maintainable
+ * Vanilla JS, no frameworks. Focus: simple, logical, cheap to maintain (便宜维护).
+ *
+ * Modules:
+ * - UIManager: DOM refs + UX helpers
+ * - CameraManager: camera lifecycle + capture
+ * - OCRService: request building + streaming/normal parsing + retry/throttle
+ * - CaptureController: orchestrates capture loop (interval/async)
+ * - App: wires everything together
  */
 
-class WebcamOCR {
-    constructor() {
-        this.stream = null;
-        this.autoCaptureInterval = null;
-        this.asyncRunning = false;
-        this.isProcessing = false;
-        this.captureCount = 0;
+/* ========== Utils ========== */
+const U = {
+  escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text ?? '';
+    return div.innerHTML;
+  },
+  isMobile() {
+    return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)
+      || window.innerWidth <= 768;
+  },
+  now() { return Date.now(); },
+  sleep(ms) { return new Promise(r => setTimeout(r, ms)); },
+  extractBase64(dataUrl) {
+    const parts = String(dataUrl).split(',');
+    if (parts.length !== 2) throw new Error('Invalid image data format');
+    return parts[1];
+  },
+  confidenceHeuristic(text, responseMeta = {}) {
+    if (!text || !text.trim()) return 0.1;
+    let c = 0.9;
+    if (text.length > 100) c = Math.min(c + 0.05, 0.98);
+    else if (text.length < 10) c = Math.max(c - 0.1, 0.7);
+    if (responseMeta.usage) c = Math.min(c + 0.02, 0.99);
+    return Math.round(c * 1000) / 1000;
+  }
+};
 
-        // DOM elements
-        this.cameraFeed = document.getElementById('cameraFeed');
-        this.captureCanvas = document.getElementById('captureCanvas');
-        this.cameraOverlay = document.getElementById('cameraOverlay');
-        this.statusIndicator = document.getElementById('statusIndicator');
-        this.statusDot = this.statusIndicator.querySelector('.status-dot');
-        this.statusText = this.statusIndicator.querySelector('.status-text');
+/* ========== UI Manager ========== */
+class UIManager {
+  constructor() {
+    this.el = {
+      video: document.getElementById('cameraFeed'),
+      canvas: document.getElementById('captureCanvas'),
+      overlay: document.getElementById('cameraOverlay'),
+      statusDot: document.querySelector('#statusIndicator .status-dot'),
+      statusText: document.querySelector('#statusIndicator .status-text'),
+      start: document.getElementById('startBtn'),
+      capture: document.getElementById('captureBtn'),
+      stop: document.getElementById('stopBtn'),
+      clear: document.getElementById('clearBtn'),
+      test: document.getElementById('testBtn'),
+      showPreview: document.getElementById('showPreview'),
+      results: document.getElementById('resultsList'),
+      processing: document.getElementById('processingIndicator'),
+      errorBox: document.getElementById('errorMessage'),
+      modelSelect: document.getElementById('modelSelect'),
+      modelInfo: document.getElementById('modelInfo'),
+      debugBrowser: document.getElementById('debugBrowser'),
+      debugHttps: document.getElementById('debugHttps'),
+      debugCameraAPI: document.getElementById('debugCameraAPI'),
+      debugStream: document.getElementById('debugStream'),
+      debugVideoSize: document.getElementById('debugVideoSize'),
+      topLoader: document.getElementById('topLoader'),
+    };
+  }
 
-        // Buttons
-        this.startBtn = document.getElementById('startBtn');
-        this.captureBtn = document.getElementById('captureBtn');
-        this.stopBtn = document.getElementById('stopBtn');
-        this.clearBtn = document.getElementById('clearBtn');
-        this.testBtn = document.getElementById('testBtn');
+  on(event, handler) {
+    document.addEventListener(event, handler);
+  }
 
-        // Options
-        this.showPreviewCheckbox = document.getElementById('showPreview');
-        this.captureModeInputs = document.querySelectorAll('input[name="captureMode"]');
-        this.modelSelect = document.getElementById('modelSelect');
-        this.modelInfo = document.getElementById('modelInfo');
-        this.getCaptureMode = () => {
-            const el = document.querySelector('input[name="captureMode"]:checked');
-            return el ? el.value : 'interval';
-        };
+  setStatus(text, type = 'default') {
+    if (this.el.statusText) this.el.statusText.textContent = text;
+    if (!this.el.statusDot) return;
+    const dot = this.el.statusDot;
+    const color = {
+      success: '#10b981',
+      error: '#ef4444',
+      warning: '#f59e0b',
+      default: '#6b7280'
+    }[type] || '#6b7280';
+    dot.style.backgroundColor = color;
+  }
 
-        // Results
-        this.resultsList = document.getElementById('resultsList');
-        this.processingIndicator = document.getElementById('processingIndicator');
-        this.errorMessage = document.getElementById('errorMessage');
+  setButtons(cameraActive) {
+    if (!this.el.start || !this.el.capture || !this.el.stop) return;
+    this.el.start.disabled = cameraActive;
+    this.el.capture.disabled = !cameraActive;
+    this.el.stop.disabled = !cameraActive;
+    this.el.start.textContent = cameraActive ? 'Camera Active' : 'Start Camera';
+    this.el.start.classList.toggle('btn-success', cameraActive);
+  }
 
-        // Debug: Check if elements exist
-        console.log('DOM Elements found:');
-        console.log('resultsList:', this.resultsList);
-        console.log('processingIndicator:', this.processingIndicator);
-        console.log('errorMessage:', this.errorMessage);
-
-        this.initializeEventListeners();
-        this.initializeDebugInfo();
-        this.autoStartCamera();
-
-        // Ensure auto-capture starts based on selected mode
-        if (!this.autoCaptureInterval && !this.asyncRunning) {
-            const mode = this.getCaptureMode();
-            if (mode === 'interval' || mode === 'async') {
-                this.startAutoCapture();
-            }
-        }
+  showLoading(show) {
+    if (this.el.topLoader) {
+      this.el.topLoader.style.display = show ? 'block' : 'none';
     }
+  }
 
-    async autoStartCamera() {
-        try {
-            console.log('Attempting auto-start camera...');
+  showError(msg) {
+    if (!this.el.errorBox) return;
+    const p = this.el.errorBox.querySelector('.error-text');
+    if (p) p.textContent = msg;
+    this.el.errorBox.style.display = 'block';
+  }
 
-            // Check if already have permission
-            const permissions = await navigator.permissions.query({ name: 'camera' });
-            console.log('Camera permission status:', permissions.state);
+  hideError() {
+    if (this.el.errorBox) this.el.errorBox.style.display = 'none';
+  }
 
-            if (permissions.state === 'denied') {
-                console.log('Camera permission denied, will prompt user');
-                this.updateStatus('Click "Start Camera" to begin', 'warning');
-                return;
-            }
+  showOverlay() {
+    if (this.el.overlay) this.el.overlay.classList.add('active');
+  }
 
-            // Auto-start camera
-            await this.startCamera();
-            console.log('Camera auto-started successfully');
+  hideOverlay() {
+    if (this.el.overlay) this.el.overlay.classList.remove('active');
+  }
 
-            // Auto-enable auto-capture with a small delay to ensure camera is fully ready
-            setTimeout(() => {
-                if (!this.autoCaptureInterval && !this.asyncRunning && this.stream) {
-                    console.log('Starting auto-capture after camera ready');
-                    this.startAutoCapture();
-                }
-            }, 1000);
+  clearResults() {
+    if (this.el.results) this.el.results.innerHTML = '';
+    this.setStatus('Results cleared', 'warning');
+  }
 
-        } catch (error) {
-            console.error('Auto-start camera failed:', error);
-            this.updateStatus('Click "Start Camera" to begin', 'warning');
+  addResult(text, confidence) {
+    if (!this.el.results) return;
+    if (!text || !String(text).trim()) return;
 
-            // Provide specific guidance based on error type
-            if (error.name === 'NotAllowedError') {
-                console.log('User needs to grant camera permission');
-            } else if (error.name === 'NotFoundError') {
-                console.log('No camera available - user needs to connect camera');
-                this.updateStatus('No camera detected', 'error');
-            } else {
-                console.log('Camera startup failed - user can retry manually');
-            }
-        }
+    const item = document.createElement('div');
+    item.className = 'result-item';
+
+    const ts = new Date().toLocaleTimeString();
+    const conf = typeof confidence === 'number' ? Math.round(confidence * 100) : 'N/A';
+    const cls = typeof conf === 'number'
+      ? (conf >= 90 ? 'high-confidence' : conf >= 70 ? 'medium-confidence' : 'low-confidence')
+      : '';
+
+    item.innerHTML = `
+      <div class="result-timestamp ${cls}">
+        ${ts} - Confidence: ${conf}%
+      </div>
+      <div class="result-text">${U.escapeHtml(text)}</div>
+    `;
+
+    this.el.results.insertBefore(item, this.el.results.firstChild);
+
+    // Keep 15 latest
+    while (this.el.results.children.length > 15) {
+      this.el.results.removeChild(this.el.results.lastChild);
     }
+    this.el.results.scrollTop = 0;
+    item.style.animation = 'slideIn 0.3s ease, highlightNew 0.5s ease';
+  }
 
-    initializeEventListeners() {
-        // Button events
-        this.startBtn.addEventListener('click', () => this.startCamera());
-        this.captureBtn.addEventListener('click', () => this.captureImage());
-        this.stopBtn.addEventListener('click', () => this.stopCamera());
-        this.clearBtn.addEventListener('click', () => this.clearResults());
-        this.testBtn.addEventListener('click', () => this.testDisplay());
-
-        // Capture mode radio events
-        this.captureModeInputs.forEach(inp => {
-            inp.addEventListener('change', () => {
-                // Restart capture according to new mode
-                this.stopAutoCapture();
-                if (this.stream && (this.getCaptureMode() === 'interval' || this.getCaptureMode() === 'async')) {
-                    this.startAutoCapture();
-                }
-            });
-        });
-
-        // Model selection events
-        this.modelSelect.addEventListener('change', () => {
-            this.updateModelInfo();
-        });
-
-        // Initialize model info
-        this.updateModelInfo();
-
-        // Keyboard shortcuts
-        document.addEventListener('keydown', (e) => {
-            if (e.key === ' ') {
-                e.preventDefault();
-                this.captureImage();
-            } else if (e.key === 'Escape') {
-                this.stopCamera();
-            }
-        });
-
-        // Handle page visibility change (pause when tab is not visible)
-        document.addEventListener('visibilitychange', () => {
-            if (document.hidden) {
-                this.stopAutoCapture();
-            } else if (this.stream && (this.getCaptureMode() === 'interval' || this.getCaptureMode() === 'async')) {
-                this.startAutoCapture();
-            }
-        });
+  updateModelInfo() {
+    try {
+      const cfg = window.GeminiConfig || {};
+      const selected = this.el.modelSelect?.value || cfg.defaultModel;
+      const info = cfg.models?.[selected]?.description || 'Model description not available';
+      if (this.el.modelInfo) this.el.modelInfo.textContent = info;
+    } catch {
+      if (this.el.modelInfo) this.el.modelInfo.textContent = 'Model description not available';
     }
-
-    async startCamera() {
-        try {
-            this.updateStatus('Starting camera...', 'warning');
-
-            // Check if camera is already active
-            if (this.stream) {
-                console.log('Camera already active');
-                return;
-            }
-
-            // Check if getUserMedia is supported
-            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-                throw new Error('Camera not supported in this browser');
-            }
-
-            // Camera constraints - more permissive for better compatibility
-            const isMobile = this.detectMobile();
-            const constraints = {
-                video: {
-                    width: { ideal: isMobile ? 640 : 1280, max: 1920 },
-                    height: { ideal: isMobile ? 480 : 720, max: 1080 },
-                    facingMode: 'user', // Use front camera by default for better compatibility
-                    frameRate: { ideal: 30, max: 30 }
-                },
-                audio: false
-            };
-
-            console.log('Requesting camera with constraints:', constraints);
-
-            this.stream = await navigator.mediaDevices.getUserMedia(constraints);
-            console.log('Camera stream obtained:', this.stream);
-
-            this.cameraFeed.srcObject = this.stream;
-            console.log('Video element source set');
-
-            // Wait for video to be ready with multiple fallback methods
-            await new Promise((resolve, reject) => {
-                const timeout = setTimeout(() => {
-                    reject(new Error('Camera startup timeout'));
-                }, 10000);
-
-                const onReady = () => {
-                    clearTimeout(timeout);
-                    console.log('Camera ready, dimensions:', this.cameraFeed.videoWidth, 'x', this.cameraFeed.videoHeight);
-                    resolve();
-                };
-
-                if (this.cameraFeed.readyState >= 2) {
-                    onReady();
-                } else {
-                    this.cameraFeed.onloadedmetadata = onReady;
-                    this.cameraFeed.onloadeddata = onReady;
-                    // Fallback: check periodically
-                    const checkReady = () => {
-                        if (this.cameraFeed.readyState >= 2) {
-                            onReady();
-                        } else {
-                            setTimeout(checkReady, 100);
-                        }
-                    };
-                    setTimeout(checkReady, 100);
-                }
-            });
-
-            // Set canvas size to match video
-            this.captureCanvas.width = this.cameraFeed.videoWidth;
-            this.captureCanvas.height = this.cameraFeed.videoHeight;
-            console.log('Canvas size set to:', this.captureCanvas.width, 'x', this.captureCanvas.height);
-
-            this.updateStatus('Camera active', 'success');
-            this.updateButtonStates(true);
-            this.updateDebugInfo();
-
-        } catch (error) {
-            console.error('Error accessing camera:', error);
-            this.updateStatus(`Camera error: ${error.message}`, 'error');
-
-            // Provide helpful error messages
-            if (error.name === 'NotAllowedError') {
-                console.log('Camera permission denied - user needs to grant permission');
-            } else if (error.name === 'NotFoundError') {
-                console.log('No camera found on this device');
-            } else if (error.name === 'NotSupportedError') {
-                console.log('Camera not supported in this browser');
-            } else if (error.name === 'NotReadableError') {
-                console.log('Camera is being used by another application');
-            }
-
-            // Don't show error messages in UI - only log to console for debugging
-            // this.showError(`Camera error: ${error.message}. Please check permissions and try again.`);
-        }
-    }
-
-    stopCamera() {
-        if (this.stream) {
-            this.stream.getTracks().forEach(track => track.stop());
-            this.stream = null;
-        }
-
-        this.stopAutoCapture();
-        this.updateStatus('Camera stopped', 'warning');
-        this.updateButtonStates(false);
-        this.hideCameraOverlay();
-        this.updateDebugInfo();
-    }
-
-    startAutoCapture() {
-        if (!this.stream) return;
-        const mode = this.getCaptureMode();
-        // Prevent duplicate starts
-        if (mode === 'interval') {
-            if (this.autoCaptureInterval) return;
-            this.stopAsyncCapture();
-            this.autoCaptureInterval = setInterval(() => {
-                // Send API request every second regardless of processing status
-                this.captureImage();
-            }, 1000); // 1 second
-        } else if (mode === 'async') {
-            if (this.asyncRunning) return;
-            this.stopAutoCapture(); // clear interval if any
-            this.startAsyncCapture();
-        }
-        this.updateStatus('Auto-capture active', 'success');
-    }
-
-    stopAutoCapture() {
-        if (this.autoCaptureInterval) {
-            clearInterval(this.autoCaptureInterval);
-            this.autoCaptureInterval = null;
-        }
-        this.stopAsyncCapture();
-        if (this.stream) {
-            this.updateStatus('Camera active', 'success');
-        }
-    }
-
-    // Async capture loop: capture -> send -> wait for response -> repeat
-    async startAsyncCapture() {
-        if (this.asyncRunning) return;
-        this.asyncRunning = true;
-        console.log('Starting async capture loop');
-
-        while (this.asyncRunning && this.stream) {
-            try {
-                // respect global throttle
-                if (this.throttleUntil && Date.now() < this.throttleUntil) {
-                    const wait = this.throttleUntil - Date.now();
-                    console.log(`Throttled, waiting ${Math.ceil(wait/1000)}s`);
-                    await new Promise(r => setTimeout(r, wait));
-                    if (!this.asyncRunning) break;
-                }
-
-                // capture frame
-                const canvas = this.captureCanvas;
-                const ctx = canvas.getContext('2d');
-                ctx.drawImage(this.cameraFeed, 0, 0, canvas.width, canvas.height);
-                const imageData = canvas.toDataURL('image/jpeg', 0.8);
-
-                // show preview if enabled
-                if (this.showPreviewCheckbox.checked) {
-                    this.showCapturePreview(imageData);
-                }
-
-                // process OCR - errors are handled internally
-                await this.processOCR(imageData);
-
-                // wait before next capture
-                await new Promise(r => setTimeout(r, 1000));
-
-            } catch (e) {
-                console.error('Async capture loop error:', e);
-                this.updateStatus('Capture error - retrying...', 'warning');
-
-                // on error, wait longer before retry to avoid tight loop
-                await new Promise(r => setTimeout(r, 3000));
-
-                // if still running, continue the loop
-                if (!this.asyncRunning) break;
-            }
-        }
-
-        this.asyncRunning = false;
-        console.log('Async capture loop stopped');
-    }
-
-    stopAsyncCapture() {
-        this.asyncRunning = false;
-    }
-
-    async captureImage() {
-        if (!this.stream) return;
-
-        this.showCameraOverlay();
-
-        try {
-            const canvas = this.captureCanvas;
-            const ctx = canvas.getContext('2d');
-
-            // Draw current video frame to canvas
-            ctx.drawImage(this.cameraFeed, 0, 0, canvas.width, canvas.height);
-
-            // Convert to base64
-            const imageData = canvas.toDataURL('image/jpeg', 0.8);
-
-            // Show preview if enabled
-            if (this.showPreviewCheckbox.checked) {
-                this.showCapturePreview(imageData);
-            }
-
-            // Send to OCR service (concurrent requests allowed)
-            this.processOCR(imageData);
-
-        } catch (error) {
-            console.error('Error capturing image:', error);
-            // Don't show error messages in UI - only log to console for debugging
-            // this.showError('Failed to capture image. Please try again.');
-        } finally {
-            this.hideCameraOverlay();
-        }
-    }
-
-    async processOCR(imageData) {
-        this.showLoading(true);
-        this.hideError();
-
-        // Throttle: if previous 429/500 set a cooldown, skip sending new requests until cooldown expires
-        const now = Date.now();
-        if (this.throttleUntil && now < this.throttleUntil) {
-            const remaining = Math.ceil((this.throttleUntil - now) / 1000);
-            this.updateStatus(`Throttled - waiting ${remaining}s`, 'warning');
-            this.showLoading(false);
-            return;
-        }
-
-        // Get API key from environment variable or prompt user
-        const apiKey = this.getApiKey();
-        let currentApiKey = null; // Initialize for error logging
-        let currentModel = null; // Initialize for error logging
-
-        if (!apiKey) {
-            throw new Error('Gemini API key not found. Please set GEMINI_API_KEY environment variable or enter it when prompted.');
-        }
-
-        currentApiKey = apiKey; // Store for error logging
-
-        try {
-            // Convert image to base64
-            const imageBase64 = this.extractBase64FromDataUrl(imageData);
-
-            // Get current model configuration
-            currentModel = this.getCurrentModel();
-            const CFG = (typeof window !== 'undefined' && window.GeminiConfig) ? window.GeminiConfig : {};
-            const promptText = CFG.prompts?.jsonText || 'Extract all text from this image. Return only the text content without any additional formatting or explanation.';
-
-            // Validate currentModel exists
-            if (!currentModel) {
-                throw new Error('No valid model configuration found. Please check your model selection.');
-            }
-
-            // Prepare request for Gemini Vision API
-            const requestData = {
-                contents: [
-                    {
-                        role: 'user',
-                        parts: [
-                            { text: promptText },
-                            {
-                                inline_data: {
-                                    mime_type: 'image/jpeg',
-                                    data: imageBase64
-                                }
-                            }
-                        ]
-                    }
-                ],
-                generationConfig: {
-                    temperature: currentModel.temperature ?? 0.1,
-                    maxOutputTokens: currentModel.maxOutputTokens ?? 1024,
-                    topP: currentModel.topP ?? 0.8,
-                    topK: currentModel.topK ?? 40
-                    // Note: thinkingConfig removed as Gemma model doesn't support thinking
-                }
-            };
-
-            // Make API call to Gemini with model-specific endpoint
-            const modelName = currentModel.name;
-            const apiEndpoint = currentModel.apiEndpoint || 'generateContent';
-            const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:${apiEndpoint}?key=${apiKey}`;
-            const maxRetries = (CFG.rateLimit?.maxRetries ?? 1);
-            const baseDelay = (CFG.rateLimit?.retryDelay ?? 5000);
-            const backoff = (CFG.rateLimit?.backoffMultiplier ?? 1);
-    
-            let attempt = 0;
-            let response;
-            let lastErrorData = null;
-
-            while (attempt <= maxRetries) {
-                try {
-                    response = await fetch(url, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'text/plain'},
-                        body: JSON.stringify(requestData)
-                    });
-
-                    if (response.ok) break;
-                } catch (fetchError) {
-                    console.error('Fetch error:', fetchError);
-                    throw new Error(`Network error: ${fetchError.message}`);
-                }
-    
-                // Attempt to parse error body if possible
-                try {
-                    lastErrorData = await response.json();
-                } catch (e) {
-                    lastErrorData = null;
-                }
-    
-                // If rate limited (429) or server error (500) and we can retry, wait then retry
-                if ((response.status === 429 || response.status === 500) && attempt < maxRetries) {
-                    // Enforce a minimum global throttle of 5s for subsequent captures
-                    this.throttleUntil = Date.now() + 5000;
-    
-                    const waitMs = Math.round(baseDelay * Math.pow(backoff, attempt));
-                    console.warn(`Request failed with status ${response.status}. Waiting ${waitMs}ms before retry...`);
-                    this.updateStatus(`Server busy - waiting ${Math.round(waitMs/1000)}s...`, 'warning');
-                    this.showLoading(true);
-                    await new Promise(resolve => setTimeout(resolve, waitMs));
-                    this.showLoading(false);
-                    this.updateStatus('Retrying after wait...', 'warning');
-                    attempt++;
-                    continue;
-                }
-    
-                // Non-retriable or out of retries -> set throttle and throw
-                this.throttleUntil = Date.now() + 5000;
-                throw new Error(`API error: ${lastErrorData?.error?.message || response.statusText || 'Unknown error'}`);
-            }
-    
-            if (!response || !response.ok) {
-                throw new Error(`API error after retries: ${lastErrorData?.error?.message || response?.statusText || 'Unknown error'}`);
-            }
-    
-            let result;
-            let extractedText = '';
-
-            // Handle streaming vs non-streaming responses
-            if (currentModel.supportsStreaming) {
-                // Handle streaming response
-                const reader = response.body.getReader();
-                const decoder = new TextDecoder();
-                let buffer = '';
-                let isComplete = false;
-
-                try {
-                    while (!isComplete) {
-                        const { done, value } = await reader.read();
-                        if (done) {
-                            isComplete = true;
-                            break;
-                        }
-
-                        buffer += decoder.decode(value, { stream: true });
-                        const lines = buffer.split('\n');
-
-                        // Process complete lines
-                        for (let i = 0; i < lines.length - 1; i++) {
-                            const line = lines[i].trim();
-                            if (line.startsWith('data: ')) {
-                                try {
-                                    const data = JSON.parse(line.slice(6));
-                                    if (data.candidates?.[0]?.content?.parts?.[0]?.text) {
-                                        let textContent = data.candidates[0].content.parts[0].text;
-
-                                        // Handle JSON format response
-                                        try {
-                                            const parsed = JSON.parse(textContent);
-                                            if (parsed.text) {
-                                                textContent = parsed.text;
-                                            }
-                                        } catch (e) {
-                                            // Not JSON, use as plain text
-                                        }
-
-                                        extractedText += textContent;
-                                        console.log('Streaming text chunk:', textContent);
-
-                                        // Display intermediate results for streaming
-                                        if (extractedText.trim()) {
-                                            this.displayResult({
-                                                text: extractedText.trim(),
-                                                confidence: 0.85
-                                            });
-                                        }
-                                    }
-                                } catch (e) {
-                                    // Ignore parsing errors for incomplete chunks
-                                    console.log('Skipping incomplete chunk:', line.slice(6));
-                                }
-                            }
-                        }
-
-                        // Keep incomplete line in buffer
-                        buffer = lines[lines.length - 1];
-                    }
-
-                    // Process any remaining text in buffer
-                    if (buffer.trim()) {
-                        console.log('Processing final buffer:', buffer);
-                        try {
-                            const finalData = JSON.parse(buffer);
-                            if (finalData.candidates?.[0]?.content?.parts?.[0]?.text) {
-                                let finalTextContent = finalData.candidates[0].content.parts[0].text;
-
-                                // Handle JSON format response
-                                try {
-                                    const parsed = JSON.parse(finalTextContent);
-                                    if (parsed.text) {
-                                        finalTextContent = parsed.text;
-                                    }
-                                } catch (e) {
-                                    // Not JSON, use as plain text
-                                }
-
-                                extractedText += finalTextContent;
-                            }
-                        } catch (e) {
-                            console.log('Final buffer not valid JSON, using as raw text');
-                            extractedText += buffer;
-                        }
-                    }
-                } finally {
-                    reader.releaseLock();
-                }
-            } else {
-                // Handle regular response
-                result = await response.json();
-                console.log('Raw API response:', result);
-
-                // Parse JSON response
-                extractedText = result.candidates?.[0]?.content?.parts?.[0]?.text || '';
-
-                // Fallback: try to extract text from the response in different ways
-                if (!extractedText && result.candidates?.[0]?.content?.parts?.[0]) {
-                    const part = result.candidates[0].content.parts[0];
-                    if (typeof part === 'string') {
-                        extractedText = part;
-                    } else if (part.text) {
-                        extractedText = part.text;
-                    }
-                }
-            }
-
-            console.log('Raw API response:', result);
-            console.log('Extracted text:', extractedText);
-            console.log('Text length:', extractedText.length);
-
-            // Check for empty text or "no text" responses
-            const noTextResponses = [
-                'no text',
-                'no text detected',
-                'no text found',
-                'no text in the image',
-                'no visible text',
-                'there is no text',
-                'no readable text'
-            ];
-
-            const isNoText = noTextResponses.some(pattern =>
-                extractedText.toLowerCase().includes(pattern.toLowerCase())
-            );
-
-            if (!extractedText.trim() || isNoText) {
-                console.log('Filtering out no-text response:', extractedText.substring(0, 50) + '...');
-                this.updateStatus('No text detected', 'warning');
-                return;
-            }
-
-            // Calculate confidence based on response
-            const confidence = this.calculateConfidence(extractedText, result);
-
-            // Display the result
-            console.log('OCR Result:', extractedText.trim(), 'Confidence:', confidence);
-            console.log('About to call displayResult...');
-            this.displayResult({
-                text: extractedText.trim(),
-                confidence: confidence
-            });
-            console.log('displayResult called successfully');
-
-            this.updateStatus('OCR completed', 'success');
-
-        } catch (error) {
-            console.error('Error processing OCR:', error);
-
-            // Provide specific error messages based on error type
-            let errorMessage = 'OCR processing failed';
-            if (error.message.includes('API key')) {
-                errorMessage = 'API key required - please set GEMINI_API_KEY';
-            } else if (error.message.includes('Network')) {
-                errorMessage = 'Network connection error';
-            } else if (error.message.includes('fetch')) {
-                errorMessage = 'Failed to connect to OCR service';
-            } else if (error.message.includes('429') || error.message.includes('500')) {
-                errorMessage = 'Service temporarily unavailable';
-            }
-
-            this.updateStatus(errorMessage, 'error');
-            console.log('OCR Error details:', {
-                message: error.message,
-                stack: error.stack,
-                apiKey: currentApiKey ? 'Present' : 'Missing',
-                model: currentModel?.name || 'Unknown'
-            });
-        } finally {
-            this.showLoading(false);
-        }
-    }
-
-    displayResult(data) {
-        console.log('displayResult called with:', data);
-
-        // Check if resultsList exists
-        if (!this.resultsList) {
-            console.error('resultsList element not found!');
-            return;
-        }
-
-        // Skip empty results
-        if (!data.text || data.text.trim().length === 0) {
-            console.log('Skipping empty result');
-            return;
-        }
-
-        const resultItem = document.createElement('div');
-        resultItem.className = 'result-item';
-
-        const timestamp = new Date().toLocaleTimeString();
-        const confidence = data.confidence ? Math.round(data.confidence * 100) : 'N/A';
-
-        // Add visual indicator for high confidence results
-        const confidenceClass = confidence >= 90 ? 'high-confidence' : confidence >= 70 ? 'medium-confidence' : 'low-confidence';
-
-        resultItem.innerHTML = `
-            <div class="result-timestamp ${confidenceClass}">
-                ${timestamp} - Confidence: ${confidence}%
-            </div>
-            <div class="result-text">
-                ${this.escapeHtml(data.text)}
-            </div>
-        `;
-
-        console.log('Created result item:', resultItem);
-        console.log('Results list before insert:', this.resultsList.children.length);
-
-        // Add to top of results list
-        this.resultsList.insertBefore(resultItem, this.resultsList.firstChild);
-
-        console.log('Results list after insert:', this.resultsList.children.length);
-
-        // Limit results to last 15 (increased from 10)
-        while (this.resultsList.children.length > 15) {
-            this.resultsList.removeChild(this.resultsList.lastChild);
-        }
-
-        console.log('Final results count:', this.resultsList.children.length);
-
-        // Scroll to top to show latest result
-        this.resultsList.scrollTop = 0;
-
-        // Add visual feedback for new results
-        resultItem.style.animation = 'slideIn 0.3s ease, highlightNew 0.5s ease';
-    }
-
-    showCapturePreview(imageData) {
-        // Create a temporary preview (optional feature)
-        // This could be implemented to show a thumbnail of captured image
-    }
-
-    clearResults() {
-        this.resultsList.innerHTML = '';
-        this.updateStatus('Results cleared', 'warning');
-    }
-
-    showLoading(show) {
-        this.processingIndicator.style.display = show ? 'block' : 'none';
-    }
-
-    showError(message) {
-        const errorText = this.errorMessage.querySelector('.error-text');
-        errorText.textContent = message;
-        this.errorMessage.style.display = 'block';
-    }
-
-    hideError() {
-        this.errorMessage.style.display = 'none';
-    }
-
-    showCameraOverlay() {
-        this.cameraOverlay.classList.add('active');
-    }
-
-    hideCameraOverlay() {
-        this.cameraOverlay.classList.remove('active');
-    }
-
-    updateStatus(text, type) {
-        this.statusText.textContent = text;
-
-        // Update status dot color
-        this.statusDot.className = 'status-dot';
-        switch (type) {
-            case 'success':
-                this.statusDot.style.backgroundColor = '#10b981';
-                break;
-            case 'error':
-                this.statusDot.style.backgroundColor = '#ef4444';
-                break;
-            case 'warning':
-                this.statusDot.style.backgroundColor = '#f59e0b';
-                break;
-            default:
-                this.statusDot.style.backgroundColor = '#6b7280';
-        }
-    }
-
-    updateButtonStates(cameraActive) {
-        this.startBtn.disabled = cameraActive;
-        this.captureBtn.disabled = !cameraActive;
-        this.stopBtn.disabled = !cameraActive;
-
-        if (cameraActive) {
-            this.startBtn.textContent = 'Camera Active';
-            this.startBtn.classList.add('btn-success');
-        } else {
-            this.startBtn.textContent = 'Start Camera';
-            this.startBtn.classList.remove('btn-success');
-        }
-    }
-
-    updateModelInfo() {
-        try {
-            const selectedModel = this.modelSelect.value;
-            const config = (typeof window !== 'undefined' && window.GeminiConfig) ? window.GeminiConfig : {};
-            const modelInfo = config.models?.[selectedModel];
-
-            if (modelInfo && modelInfo.description) {
-                this.modelInfo.textContent = modelInfo.description;
-            } else {
-                this.modelInfo.textContent = 'Model description not available';
-            }
-        } catch (error) {
-            console.warn('Error updating model info:', error);
-            this.modelInfo.textContent = 'Model description not available';
-        }
-    }
-
-    getCurrentModel() {
-        try {
-            const config = (typeof window !== 'undefined' && window.GeminiConfig) ? window.GeminiConfig : {};
-            const selectedModel = this.modelSelect?.value || config.defaultModel;
-
-            // Try to get the selected model first
-            let model = config.models?.[selectedModel];
-
-            // Fallback to default model if selected model not found
-            if (!model && config.defaultModel) {
-                model = config.models?.[config.defaultModel];
-            }
-
-            // Final fallback to first available model
-            if (!model) {
-                const modelKeys = Object.keys(config.models || {});
-                if (modelKeys.length > 0) {
-                    model = config.models[modelKeys[0]];
-                }
-            }
-
-            return model;
-        } catch (error) {
-            console.warn('Error getting current model:', error);
-            return null;
-        }
-    }
-
-    initializeDebugInfo() {
-        // Show debug info only in development
-        const isDevelopment = window.location.hostname === 'localhost' ||
-                             window.location.hostname === '127.0.0.1' ||
-                             window.location.protocol === 'file:';
-
-        const debugInfo = document.getElementById('debugInfo');
-        if (debugInfo) {
-            debugInfo.style.display = isDevelopment ? 'block' : 'none';
-        }
-
-        if (isDevelopment) {
-            this.updateDebugInfo();
-        }
-    }
-
-    updateDebugInfo() {
-        const debugBrowser = document.getElementById('debugBrowser');
-        const debugHttps = document.getElementById('debugHttps');
-        const debugCameraAPI = document.getElementById('debugCameraAPI');
-        const debugStream = document.getElementById('debugStream');
-        const debugVideoSize = document.getElementById('debugVideoSize');
-
-        if (debugBrowser) debugBrowser.textContent = navigator.userAgent.split(' ').pop();
-        if (debugHttps) debugHttps.textContent = window.location.protocol === 'https:' ? '✅' : '❌';
-        if (debugCameraAPI) debugCameraAPI.textContent = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia) ? '✅' : '❌';
-        if (debugStream) debugStream.textContent = this.stream ? '✅ Active' : '❌ Inactive';
-        if (debugVideoSize) debugVideoSize.textContent = this.stream ?
-            `${this.cameraFeed.videoWidth}x${this.cameraFeed.videoHeight}` : 'N/A';
-    }
-
-    detectMobile() {
-        return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
-               window.innerWidth <= 768;
-    }
-
-    escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
-    }
-
-    // Get API key from environment variable or user input
-    getApiKey() {
-        // Try to get from environment variable first
-        if (typeof GEMINI_API_KEY !== 'undefined' && GEMINI_API_KEY) {
-            console.log('Using API key from environment variable');
-            return GEMINI_API_KEY;
-        }
-
-        // Try to get from localStorage
-        const storedKey = localStorage.getItem('gemini_api_key');
-        if (storedKey) {
-            console.log('Using API key from localStorage');
-            return storedKey;
-        }
-
-        // Prompt user for API key with helpful message
-        const userKey = prompt('Please enter your Gemini API key from Google AI Studio (https://aistudio.google.com/):');
-        if (userKey && userKey.trim()) {
-            localStorage.setItem('gemini_api_key', userKey.trim());
-            console.log('API key saved to localStorage');
-            return userKey.trim();
-        }
-
-        console.log('No API key provided');
-        return null;
-    }
-
-    // Extract base64 data from data URL
-    extractBase64FromDataUrl(dataUrl) {
-        const parts = dataUrl.split(',');
-        if (parts.length !== 2) {
-            throw new Error('Invalid image data format');
-        }
-        return parts[1];
-    }
-
-    // Calculate confidence based on response quality
-    calculateConfidence(text, response) {
-        if (!text || text.trim().length === 0) {
-            return 0.1; // Low confidence if no text
-        }
-
-        // Base confidence for Gemma model
-        let confidence = 0.9;
-
-        // Adjust based on text length (longer text usually means higher confidence)
-        if (text.length > 100) {
-            confidence = Math.min(confidence + 0.05, 0.98);
-        } else if (text.length < 10) {
-            confidence = Math.max(confidence - 0.1, 0.7);
-        }
-
-        // Check if response has usage metadata (indicates successful processing)
-        if (response.usage) {
-            confidence = Math.min(confidence + 0.02, 0.99);
-        }
-
-        return Math.round(confidence * 1000) / 1000;
-    }
-
-    // Generate demo OCR results for frontend-only demo (fallback)
-    generateDemoOCR() {
-        const demoTexts = [
-            'Welcome to Webcam OCR - Real-time text recognition demo',
-            'This application demonstrates real-time OCR capabilities',
-            'Images are processed every 2 seconds automatically',
-            'The quick brown fox jumps over the lazy dog',
-            '0123456789 - Numbers and special characters detected',
-            'Modern web technologies enable powerful applications',
-            'Thank you for trying this OCR demonstration',
-            'Real-time processing with instant results',
-            'High accuracy text recognition system',
-            'Cross-platform compatibility achieved'
-        ];
-
-        // Simulate varying confidence levels
-        const baseConfidence = 0.85 + (Math.random() * 0.15); // 85-100%
-
-        return {
-            text: demoTexts[Math.floor(Math.random() * demoTexts.length)],
-            confidence: Math.round(baseConfidence * 1000) / 1000
-        };
-    }
-
-    // Utility method to test with mock data
-    testWithMockData() {
-        const mockResults = [
-            'This is a test OCR result from the camera feed.',
-            'Gemma-3-27B-IT model successfully processed the image.',
-            'Real-time text recognition is working correctly.'
-        ];
-
-        mockResults.forEach((text, index) => {
-            setTimeout(() => {
-                this.displayResult({
-                    text: text,
-                    confidence: 0.95 - (index * 0.05)
-                });
-            }, index * 1000);
-        });
-    }
-
-    // Test display function - call this from console to verify display works
-    testDisplay() {
-        console.log('Testing display function...');
-        this.displayResult({
-            text: 'Test OCR Result - Display is working!',
-            confidence: 0.95
-        });
-        console.log('Test result should appear in the results list');
-    }
+  }
+
+  updateDebug({ streamActive, videoWidth, videoHeight }) {
+    if (this.el.debugBrowser) this.el.debugBrowser.textContent = navigator.userAgent.split(' ').pop();
+    if (this.el.debugHttps) this.el.debugHttps.textContent = window.location.protocol === 'https:' ? '✅' : '❌';
+    if (this.el.debugCameraAPI) this.el.debugCameraAPI.textContent = !!(navigator.mediaDevices?.getUserMedia) ? '✅' : '❌';
+    if (this.el.debugStream) this.el.debugStream.textContent = streamActive ? '✅ Active' : '❌ Inactive';
+    if (this.el.debugVideoSize) this.el.debugVideoSize.textContent = streamActive ? `${videoWidth}x${videoHeight}` : 'N/A';
+  }
 }
 
-// Initialize the application when DOM is loaded
-document.addEventListener('DOMContentLoaded', () => {
-    const app = new WebcamOCR();
+/* ========== Camera Manager ========== */
+class CameraManager {
+  constructor(ui) {
+    this.ui = ui;
+    this.stream = null;
+  }
 
-    // Add version info to footer
-    const footer = document.querySelector('.app-footer p');
-    footer.textContent += ` | v1.0.0 | ${navigator.userAgent.includes('Mobile') ? 'Mobile' : 'Desktop'}`;
+  async start() {
+    this.ui.setStatus('Starting camera...', 'warning');
 
-    // Expose app instance for debugging (development only)
-    if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
-        window.webcamOCR = app;
+    if (this.stream) return;
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw new Error('Camera not supported in this browser');
     }
-});
 
-// Service Worker registration removed - not needed for core functionality
-// The application works perfectly without service worker
+    const constraints = {
+      video: {
+        width: { ideal: U.isMobile() ? 640 : 1280, max: 1920 },
+        height: { ideal: U.isMobile() ? 480 : 720, max: 1080 },
+        facingMode: 'user',
+        frameRate: { ideal: 30, max: 30 }
+      },
+      audio: false
+    };
+
+    this.stream = await navigator.mediaDevices.getUserMedia(constraints);
+    this.ui.el.video.srcObject = this.stream;
+
+    await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('Camera startup timeout')), 10000);
+      const onReady = () => { clearTimeout(timeout); resolve(); };
+      if (this.ui.el.video.readyState >= 2) onReady();
+      else {
+        this.ui.el.video.onloadedmetadata = onReady;
+        this.ui.el.video.onloadeddata = onReady;
+        setTimeout(function check() {
+          if (this.ui.el.video.readyState >= 2) onReady();
+          else setTimeout(check.bind(this), 100);
+        }.bind(this), 100);
+      }
+    });
+
+    // Resize canvas
+    this.ui.el.canvas.width = this.ui.el.video.videoWidth;
+    this.ui.el.canvas.height = this.ui.el.video.videoHeight;
+
+    this.ui.setStatus('Camera active', 'success');
+    this.ui.setButtons(true);
+    this.ui.updateDebug({
+      streamActive: true,
+      videoWidth: this.ui.el.video.videoWidth,
+      videoHeight: this.ui.el.video.videoHeight
+    });
+  }
+
+  stop() {
+    if (this.stream) {
+      this.stream.getTracks().forEach(t => t.stop());
+      this.stream = null;
+    }
+    this.ui.setStatus('Camera stopped', 'warning');
+    this.ui.setButtons(false);
+    this.ui.hideOverlay();
+    this.ui.updateDebug({ streamActive: false, videoWidth: 0, videoHeight: 0 });
+  }
+
+  isActive() { return !!this.stream; }
+
+  captureJpeg(quality = 0.8) {
+    if (!this.isActive()) return null;
+    const ctx = this.ui.el.canvas.getContext('2d');
+    ctx.drawImage(this.ui.el.video, 0, 0, this.ui.el.canvas.width, this.ui.el.canvas.height);
+    return this.ui.el.canvas.toDataURL('image/jpeg', quality);
+  }
+}
+
+/* ========== OCR Service ========== */
+class OCRService {
+  constructor(getApiKey) {
+    this.getApiKey = getApiKey;
+  }
+
+  getModel() {
+    const cfg = window.GeminiConfig || {};
+    const selected = document.getElementById('modelSelect')?.value || cfg.defaultModel;
+    let model = cfg.models?.[selected];
+    if (!model && cfg.defaultModel) model = cfg.models?.[cfg.defaultModel];
+    if (!model) {
+      const keys = Object.keys(cfg.models || {});
+      if (keys.length) model = cfg.models[keys[0]];
+    }
+    return model || null;
+  }
+
+  buildRequest(imageBase64, promptText, model) {
+    return {
+      contents: [{
+        role: 'user',
+        parts: [
+          { text: promptText },
+          { inline_data: { mime_type: 'image/jpeg', data: imageBase64 } }
+        ]
+      }],
+      generationConfig: {
+        temperature: model.temperature ?? 0.1,
+        maxOutputTokens: model.maxOutputTokens ?? 1024,
+        topP: model.topP ?? 0.8,
+        topK: model.topK ?? 40
+      }
+    };
+  }
+
+  parseTextValue(value) {
+    // value might be plain string or stringified JSON like {"text":"..."}
+    if (typeof value !== 'string') return '';
+    try {
+      const parsed = JSON.parse(value);
+      if (parsed && typeof parsed.text === 'string') return parsed.text;
+    } catch { /* not JSON */ }
+    return value;
+  }
+
+  async request(imageBase64) {
+    const apiKey = this.getApiKey();
+    if (!apiKey) throw new Error('Gemini API key not found. Please set GEMINI_API_KEY or enter when prompted.');
+
+    const model = this.getModel();
+    if (!model) throw new Error('No valid model configuration found.');
+
+    const CFG = window.GeminiConfig || {};
+    const promptText =
+      CFG.prompts?.jsonText ||
+      'Extract all text from this image. Return only the text content without additional formatting.';
+
+    const req = this.buildRequest(imageBase64, promptText, model);
+    const rawEndpoint = model.apiEndpoint || 'generateContent';
+    const endpoint = /stream/i.test(rawEndpoint) ? 'generateContent' : rawEndpoint; // 强制非流式
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model.name}:${endpoint}?key=${apiKey}`;
+
+    const maxRetries = CFG.rateLimit?.maxRetries ?? 1;
+    const baseDelay = CFG.rateLimit?.retryDelay ?? 5000;
+    const backoff = CFG.rateLimit?.backoffMultiplier ?? 1;
+
+    let attempt = 0;
+    let response;
+    let lastError = null;
+
+    while (attempt <= maxRetries) {
+      try {
+        response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain' },
+          body: JSON.stringify(req)
+        });
+        if (response.ok) break;
+      } catch (e) {
+        throw new Error(`Network error: ${e.message}`);
+      }
+
+      try { lastError = await response.json(); } catch { lastError = null; }
+
+      if ((response.status === 429 || response.status === 500) && attempt < maxRetries) {
+        const waitMs = Math.round(baseDelay * Math.pow(backoff, attempt));
+        await U.sleep(waitMs);
+        attempt++;
+        continue;
+      }
+
+      throw new Error(`API error: ${lastError?.error?.message || response.statusText || 'Unknown error'}`);
+    }
+
+    if (!response?.ok) {
+      throw new Error(`API error after retries: ${lastError?.error?.message || response?.statusText || 'Unknown'}`);
+    }
+
+    // 统一使用非流式解析
+    const json = await response.json();
+    const raw = json?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    const text = raw || (typeof json?.candidates?.[0]?.content?.parts?.[0] === 'string'
+      ? json.candidates[0].content.parts[0]
+      : json?.candidates?.[0]?.content?.parts?.[0]?.text || '');
+
+    return { text: this.parseTextValue(text || ''), meta: json || {} };
+  }
+}
+
+/* ========== Capture Controller ========== */
+class CaptureController {
+  constructor(ui, camera, ocr) {
+    this.ui = ui;
+    this.camera = camera;
+    this.ocr = ocr;
+    this.mode = 'async'; // default
+    this.intervalId = null;
+    this.asyncRunning = false;
+    this.throttleUntil = 0;
+  }
+
+  setMode(mode) { this.mode = mode; }
+
+  stop() {
+    if (this.intervalId) clearInterval(this.intervalId);
+    this.intervalId = null;
+    this.asyncRunning = false;
+    if (this.camera.isActive()) this.ui.setStatus('Camera active', 'success');
+  }
+
+  async start() {
+    if (!this.camera.isActive()) return;
+    this.stop();
+    if (this.mode === 'interval') {
+      if (this.intervalId) return;
+      this.intervalId = setInterval(() => this.captureOnce(false), 1000);
+    } else {
+      if (this.asyncRunning) return;
+      this.asyncRunning = true;
+      while (this.asyncRunning && this.camera.isActive()) {
+        await this.captureOnce(true);
+        await U.sleep(1000);
+      }
+    }
+    this.ui.setStatus('Auto-capture active', 'success');
+  }
+
+  async captureOnce(waitForResponse) {
+    // global throttle
+    const now = U.now();
+    if (this.throttleUntil > now) {
+      const remain = Math.ceil((this.throttleUntil - now) / 1000);
+      this.ui.setStatus(`Throttled - waiting ${remain}s`, 'warning');
+      if (waitForResponse) await U.sleep(this.throttleUntil - now);
+    }
+
+    const dataUrl = this.camera.captureJpeg(0.8);
+    if (!dataUrl) return;
+    if (this.ui.el.showPreview?.checked) {
+      // preview hook: can be implemented if needed
+    }
+
+    try {
+      this.ui.showLoading(true);
+      this.ui.hideError();
+
+      const base64 = U.extractBase64(dataUrl);
+
+      const { text, meta } = await this.ocr.request(base64);
+
+      // Trim and clean the OCR result
+      const cleanedText = this.app.cleanOcrResult(text);
+
+      const noTextPatterns = ['no text', 'no text detected', 'no text found', 'no visible text', 'no readable text'];
+      if (!cleanedText || noTextPatterns.some(p => cleanedText.toLowerCase().includes(p))) {
+        this.ui.setStatus('No text detected', 'warning');
+        return;
+      }
+
+      const confidence = U.confidenceHeuristic(cleanedText, meta);
+      this.ui.addResult(cleanedText, confidence);
+      this.ui.setStatus('OCR completed', 'success');
+    } catch (e) {
+      const msg =
+        e.message.includes('API key') ? 'API key required - please set GEMINI_API_KEY'
+        : e.message.includes('Network') ? 'Network connection error'
+        : e.message.includes('429') || e.message.includes('500') ? 'Service temporarily unavailable'
+        : 'OCR processing failed';
+      this.ui.setStatus(msg, 'error');
+
+      // backoff 5s after server-side issues to be polite
+      if (e.message.includes('429') || e.message.includes('500')) {
+        this.throttleUntil = U.now() + 5000;
+      }
+      console.warn('OCR error:', e);
+    } finally {
+      this.ui.showLoading(false);
+    }
+  }
+}
+
+/* ========== App (Composition Root) ========== */
+class App {
+  constructor() {
+    this.ui = new UIManager();
+    this.camera = new CameraManager(this.ui);
+    this.ocr = new OCRService(this.getApiKey.bind(this));
+    this.capture = new CaptureController(this.ui, this.camera, this.ocr);
+
+    this.bindEvents();
+    this.initDebugPanel();
+    this.autoStartCamera();
+  }
+
+  cleanOcrResult(text) {
+    if (!text) return '';
+    // Define patterns to remove
+    const patternsToRemove = [
+      /@ezlink/i,
+      /Check card balance and reload via/i,
+      /Scan QR to download/i,
+      /adult/i,
+      /AD: \d{1,3}\/\d{1,3}/i
+    ];
+    
+    let cleanedText = text;
+    patternsToRemove.forEach(pattern => {
+      cleanedText = cleanedText.replace(pattern, '');
+    });
+
+    // Split by lines, trim each line, and filter out empty lines
+    const lines = cleanedText.split('\n').map(line => line.trim()).filter(Boolean);
+    return lines.join('\n');
+  }
+
+  bindEvents() {
+    // Buttons
+    this.ui.el.start?.addEventListener('click', () => this.camera.start());
+    this.ui.el.capture?.addEventListener('click', () => this.capture.captureOnce(true));
+    this.ui.el.stop?.addEventListener('click', () => {
+      this.capture.stop();
+      this.camera.stop();
+    });
+    this.ui.el.clear?.addEventListener('click', () => this.ui.clearResults());
+    this.ui.el.test?.addEventListener('click', () => this.ui.addResult('Test OCR Result - Display is working!', 0.95));
+
+    // Capture mode
+    document.querySelectorAll('input[name="captureMode"]').forEach(radio => {
+      radio.addEventListener('change', () => {
+        this.capture.setMode(radio.value);
+        this.capture.stop();
+        if (this.camera.isActive()) this.capture.start();
+      });
+    });
+
+    // Model selection
+    this.ui.el.modelSelect?.addEventListener('change', () => this.ui.updateModelInfo());
+
+    // Keyboard shortcuts
+    document.addEventListener('keydown', (e) => {
+      if (e.key === ' ') { e.preventDefault(); this.capture.captureOnce(true); }
+      if (e.key === 'Escape') { this.capture.stop(); this.camera.stop(); }
+    });
+
+    // Page visibility
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) {
+        this.capture.stop();
+      } else if (this.camera.isActive()) {
+        this.capture.start();
+      }
+    });
+
+    // Init model info
+    this.ui.updateModelInfo();
+  }
+
+  async autoStartCamera() {
+    try {
+      const isDev = location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.protocol === 'file:';
+      // permissions API may not be available on all browsers
+      const canQuery = navigator.permissions?.query;
+      if (canQuery) {
+        try {
+          const res = await navigator.permissions.query({ name: 'camera' });
+          if (res.state === 'denied') {
+            this.ui.setStatus('Click "Start Camera" to begin', 'warning');
+            return;
+          }
+        } catch { /* ignore */ }
+      }
+
+      await this.camera.start();
+
+      setTimeout(() => {
+        if (this.camera.isActive()) {
+          const modeEl = document.querySelector('input[name="captureMode"]:checked');
+          const mode = modeEl ? modeEl.value : 'interval';
+          this.capture.setMode(mode);
+          this.capture.start();
+        }
+      }, 1000);
+    } catch (e) {
+      console.warn('Auto-start camera failed', e);
+      this.ui.setStatus('Click "Start Camera" to begin', 'warning');
+      if (e.name === 'NotFoundError') this.ui.setStatus('No camera detected', 'error');
+    }
+  }
+
+  initDebugPanel() {
+    const isDevelopment = location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.protocol === 'file:';
+    const debugInfo = document.getElementById('debugInfo');
+    if (debugInfo) debugInfo.style.display = isDevelopment ? 'block' : 'none';
+    if (isDevelopment) {
+      this.ui.updateDebug({
+        streamActive: this.camera.isActive(),
+        videoWidth: this.ui.el.video.videoWidth,
+        videoHeight: this.ui.el.video.videoHeight
+      });
+    }
+  }
+
+  // Get API key from env / localStorage / prompt
+  getApiKey() {
+    try {
+      if (typeof GEMINI_API_KEY !== 'undefined' && GEMINI_API_KEY) {
+        return GEMINI_API_KEY;
+      }
+    } catch {}
+    const stored = localStorage.getItem('gemini_api_key');
+    if (stored) return stored;
+
+    const key = prompt('Enter your Gemini API key (https://aistudio.google.com/):');
+    if (key && key.trim()) {
+      localStorage.setItem('gemini_api_key', key.trim());
+      return key.trim();
+    }
+    return null;
+  }
+}
+
+/* ========== Bootstrap ========== */
+document.addEventListener('DOMContentLoaded', () => {
+  const app = new App();
+  // footer version info
+  const footer = document.querySelector('.app-footer p');
+  if (footer) footer.textContent += ` | v1.1.0 | ${navigator.userAgent.includes('Mobile') ? 'Mobile' : 'Desktop'}`;
+
+  // Expose in dev
+  if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
+    window.webcamOCR = app;
+  }
+  
+  // Pass app instance to controller
+  if (app.capture) {
+    app.capture.app = app;
+  }
+});

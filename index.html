@@ -16,6 +16,7 @@
                 <span class="status-dot"></span>
                 <span class="status-text">Initializing...</span>
             </div>
+            <div class="top-loader" id="topLoader"></div>
         </header>
 
         <!-- Main Content -->
@@ -35,61 +36,43 @@
 
             <!-- Controls Section -->
             <section class="controls-section">
-                <div class="control-buttons">
-                    <button id="startBtn" class="btn btn-primary">
-                        <span class="btn-icon">🎥</span>
-                        Start Camera
-                    </button>
-                    <button id="captureBtn" class="btn btn-secondary" disabled>
-                        <span class="btn-icon">📸</span>
-                        Capture & OCR
-                    </button>
-                    <button id="stopBtn" class="btn btn-danger" disabled>
-                        <span class="btn-icon">⏹️</span>
-                        Stop
-                    </button>
-                </div>
-
-                <!-- Debug Info (only show in development) -->
-                <div class="debug-info" id="debugInfo" style="display: none;">
-                    <details>
-                        <summary>Debug Information</summary>
-                        <div class="debug-content">
-                            <p><strong>Browser:</strong> <span id="debugBrowser"></span></p>
-                            <p><strong>HTTPS:</strong> <span id="debugHttps"></span></p>
-                            <p><strong>Camera API:</strong> <span id="debugCameraAPI"></span></p>
-                            <p><strong>Stream Status:</strong> <span id="debugStream"></span></p>
-                            <p><strong>Video Dimensions:</strong> <span id="debugVideoSize"></span></p>
-                        </div>
-                    </details>
-                </div>
-
-                <div class="control-options">
-                    <div class="option-group">
-                        <label>
-                            <input type="radio" name="captureMode" id="modeInterval" value="interval">
-                            <span class="option-label">Auto-capture every 1s</span>
-                        </label>
-                        <label>
-                            <input type="radio" name="captureMode" id="modeAsync" value="async" checked>
-                            <span class="option-label">Async Capture OCR</span>
-                        </label>
+                <div class="control-grid">
+                    <button id="startBtn" class="btn btn-primary">Start Camera</button>
+                    <button id="captureBtn" class="btn btn-secondary" disabled>Capture & OCR</button>
+                    <button id="stopBtn" class="btn btn-danger" disabled>Stop</button>
+                    
+                    <div class="control-group">
+                        <label for="modelSelect">AI Model</label>
+                        <select id="modelSelect">
+                            <option value="gemini-flash-lite-latest">Gemini Flash Lite (Fast)</option>
+                            <option value="gemma-3-27b-it">Gemma 3 27B (Advanced)</option>
+                        </select>
                     </div>
-                    <label class="option-group">
-                        <input type="checkbox" id="showPreview" checked>
-                        <span class="option-label">Show capture preview</span>
-                    </label>
+
+                    <div class="control-group">
+                        <label>Capture Mode</label>
+                        <div class="radio-group">
+                            <label><input type="radio" name="captureMode" value="interval"> Interval</label>
+                            <label><input type="radio" name="captureMode" value="async" checked> Async</label>
+                        </div>
+                    </div>
+
+                    <div class="control-group">
+                        <label><input type="checkbox" id="showPreview" checked> Show Preview</label>
+                    </div>
                 </div>
 
-                <!-- Model Selection -->
-                <div class="model-selection">
-                    <label for="modelSelect">AI Model:</label>
-                    <select id="modelSelect" class="model-select">
-                        <option value="gemini-flash-lite-latest">Gemini Flash Lite (Fast)</option>
-                        <option value="gemma-3-27b-it">Gemma 3 27B (Advanced OCR)</option>
-                    </select>
-                    <div class="model-info" id="modelInfo">Fast model optimized for speed and efficiency</div>
-                </div>
+                <!-- Debug Info (collapsible) -->
+                <details class="debug-info" id="debugInfo" style="display: none;">
+                    <summary>Debug Info</summary>
+                    <div class="debug-content">
+                        <p><strong>Browser:</strong> <span id="debugBrowser"></span></p>
+                        <p><strong>HTTPS:</strong> <span id="debugHttps"></span></p>
+                        <p><strong>Camera API:</strong> <span id="debugCameraAPI"></span></p>
+                        <p><strong>Stream Status:</strong> <span id="debugStream"></span></p>
+                        <p><strong>Video Dimensions:</strong> <span id="debugVideoSize"></span></p>
+                    </div>
+                </details>
             </section>
 
             <!-- Results Section -->
@@ -111,21 +94,11 @@
                 </div>
             </section>
 
-            <!-- Processing Indicator - More prominent position -->
+            <!-- Processing Indicator -->
             <div id="processingIndicator" class="processing-indicator" style="display: none;">
-                <div class="processing-content">
-                    <div class="processing-spinner"></div>
-                    <div class="processing-text">
-                        <h3>Processing Image</h3>
-                        <p>Analyzing with Gemma-3-27B-IT...</p>
-                        <div class="processing-progress">
-                            <div class="progress-bar">
-                                <div class="progress-fill"></div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </section>
+                <div class="spinner"></div>
+                <p>Processing...</p>
+            </div>
         </main>
 
         <!-- Footer -->
