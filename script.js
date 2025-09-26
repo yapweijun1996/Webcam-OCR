@@ -514,7 +514,14 @@ class App {
 
   bindEvents() {
     // Buttons
-    this.ui.el.start?.addEventListener('click', () => this.camera.start());
+    this.ui.el.start?.addEventListener('click', async () => {
+      await this.camera.start(); // ensure camera is ready before OCR
+      const modeEl = document.querySelector('input[name="captureMode"]:checked');
+      const mode = modeEl ? modeEl.value : 'async'; // default to async
+      this.capture.setMode(mode);
+      // Do not await: continuous loop; keep UI responsive (中文解释: 不要等待, 让UI保持响应)
+      this.capture.start();
+    });
     this.ui.el.stop?.addEventListener('click', () => {
       this.capture.stop();
       this.camera.stop();

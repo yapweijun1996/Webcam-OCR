@@ -48,15 +48,18 @@ body {
 }
 
 .top-loader {
-  position: absolute;
+  position: fixed;       /* 固定在视口顶部 (中文解释: 随滚动不动) */
   top: 0;
   left: 0;
+  right: 0;
   width: 100%;
   height: 3px;
   background-color: var(--primary);
   transform: translateX(-100%);
   animation: top-loader-animation 1.5s infinite linear;
   display: none; /* Hidden by default */
+  z-index: 10000;        /* 始终在最上层 */
+  pointer-events: none;  /* 不拦截点击事件 */
 }
 
 @keyframes top-loader-animation {
@@ -139,6 +142,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+  margin-bottom: 10px;
 }
 
 .radio-group {
