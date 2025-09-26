@@ -387,6 +387,7 @@ class WebcamOCR {
         // Get API key from environment variable or prompt user
         const apiKey = this.getApiKey();
         let currentApiKey = null; // Initialize for error logging
+        let currentModel = null; // Initialize for error logging
 
         if (!apiKey) {
             throw new Error('Gemini API key not found. Please set GEMINI_API_KEY environment variable or enter it when prompted.');
@@ -399,7 +400,7 @@ class WebcamOCR {
             const imageBase64 = this.extractBase64FromDataUrl(imageData);
 
             // Get current model configuration
-            const currentModel = this.getCurrentModel();
+            currentModel = this.getCurrentModel();
             const CFG = (typeof window !== 'undefined' && window.GeminiConfig) ? window.GeminiConfig : {};
             const promptText = CFG.prompts?.jsonText || 'Extract all text from this image. Return only the text content without any additional formatting or explanation.';
 
@@ -428,10 +429,8 @@ class WebcamOCR {
                     temperature: currentModel.temperature ?? 0.1,
                     maxOutputTokens: currentModel.maxOutputTokens ?? 1024,
                     topP: currentModel.topP ?? 0.8,
-                    topK: currentModel.topK ?? 40,
-                    thinkingConfig: {
-                        thinkingBudget: 0
-                    }
+                    topK: currentModel.topK ?? 40
+                    // Note: thinkingConfig removed as Gemma model doesn't support thinking
                 }
             };
 
@@ -451,7 +450,7 @@ class WebcamOCR {
                 try {
                     response = await fetch(url, {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
+                        headers: { 'Content-Type': 'text/plain'},
                         body: JSON.stringify(requestData)
                     });
 
@@ -502,11 +501,15 @@ class WebcamOCR {
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder();
                 let buffer = '';
+                let isComplete = false;
 
                 try {
-                    while (true) {
+                    while (!isComplete) {
                         const { done, value } = await reader.read();
-                        if (done) break;
+                        if (done) {
+                            isComplete = true;
+                            break;
+                        }
 
                         buffer += decoder.decode(value, { stream: true });
                         const lines = buffer.split('\n');
@@ -518,16 +521,64 @@ class WebcamOCR {
                                 try {
                                     const data = JSON.parse(line.slice(6));
                                     if (data.candidates?.[0]?.content?.parts?.[0]?.text) {
-                                        extractedText += data.candidates[0].content.parts[0].text;
+                                        let textContent = data.candidates[0].content.parts[0].text;
+
+                                        // Handle JSON format response
+                                        try {
+                                            const parsed = JSON.parse(textContent);
+                                            if (parsed.text) {
+                                                textContent = parsed.text;
+                                            }
+                                        } catch (e) {
+                                            // Not JSON, use as plain text
+                                        }
+
+                                        extractedText += textContent;
+                                        console.log('Streaming text chunk:', textContent);
+
+                                        // Display intermediate results for streaming
+                                        if (extractedText.trim()) {
+                                            this.displayResult({
+                                                text: extractedText.trim(),
+                                                confidence: 0.85
+                                            });
+                                        }
                                     }
                                 } catch (e) {
                                     // Ignore parsing errors for incomplete chunks
+                                    console.log('Skipping incomplete chunk:', line.slice(6));
                                 }
                             }
                         }
 
                         // Keep incomplete line in buffer
                         buffer = lines[lines.length - 1];
+                    }
+
+                    // Process any remaining text in buffer
+                    if (buffer.trim()) {
+                        console.log('Processing final buffer:', buffer);
+                        try {
+                            const finalData = JSON.parse(buffer);
+                            if (finalData.candidates?.[0]?.content?.parts?.[0]?.text) {
+                                let finalTextContent = finalData.candidates[0].content.parts[0].text;
+
+                                // Handle JSON format response
+                                try {
+                                    const parsed = JSON.parse(finalTextContent);
+                                    if (parsed.text) {
+                                        finalTextContent = parsed.text;
+                                    }
+                                } catch (e) {
+                                    // Not JSON, use as plain text
+                                }
+
+                                extractedText += finalTextContent;
+                            }
+                        } catch (e) {
+                            console.log('Final buffer not valid JSON, using as raw text');
+                            extractedText += buffer;
+                        }
                     }
                 } finally {
                     reader.releaseLock();
@@ -610,7 +661,7 @@ class WebcamOCR {
                 message: error.message,
                 stack: error.stack,
                 apiKey: currentApiKey ? 'Present' : 'Missing',
-                model: currentModel?.name
+                model: currentModel?.name || 'Unknown'
             });
         } finally {
             this.showLoading(false);
@@ -626,14 +677,23 @@ class WebcamOCR {
             return;
         }
 
+        // Skip empty results
+        if (!data.text || data.text.trim().length === 0) {
+            console.log('Skipping empty result');
+            return;
+        }
+
         const resultItem = document.createElement('div');
         resultItem.className = 'result-item';
 
         const timestamp = new Date().toLocaleTimeString();
         const confidence = data.confidence ? Math.round(data.confidence * 100) : 'N/A';
 
+        // Add visual indicator for high confidence results
+        const confidenceClass = confidence >= 90 ? 'high-confidence' : confidence >= 70 ? 'medium-confidence' : 'low-confidence';
+
         resultItem.innerHTML = `
-            <div class="result-timestamp">
+            <div class="result-timestamp ${confidenceClass}">
                 ${timestamp} - Confidence: ${confidence}%
             </div>
             <div class="result-text">
@@ -649,12 +709,18 @@ class WebcamOCR {
 
         console.log('Results list after insert:', this.resultsList.children.length);
 
-        // Limit results to last 10
-        while (this.resultsList.children.length > 10) {
+        // Limit results to last 15 (increased from 10)
+        while (this.resultsList.children.length > 15) {
             this.resultsList.removeChild(this.resultsList.lastChild);
         }
 
         console.log('Final results count:', this.resultsList.children.length);
+
+        // Scroll to top to show latest result
+        this.resultsList.scrollTop = 0;
+
+        // Add visual feedback for new results
+        resultItem.style.animation = 'slideIn 0.3s ease, highlightNew 0.5s ease';
     }
 
     showCapturePreview(imageData) {
@@ -741,9 +807,31 @@ class WebcamOCR {
     }
 
     getCurrentModel() {
-        const config = (typeof window !== 'undefined' && window.GeminiConfig) ? window.GeminiConfig : {};
-        const selectedModel = this.modelSelect.value;
-        return config.models?.[selectedModel] || config.models?.[config.defaultModel] || null;
+        try {
+            const config = (typeof window !== 'undefined' && window.GeminiConfig) ? window.GeminiConfig : {};
+            const selectedModel = this.modelSelect?.value || config.defaultModel;
+
+            // Try to get the selected model first
+            let model = config.models?.[selectedModel];
+
+            // Fallback to default model if selected model not found
+            if (!model && config.defaultModel) {
+                model = config.models?.[config.defaultModel];
+            }
+
+            // Final fallback to first available model
+            if (!model) {
+                const modelKeys = Object.keys(config.models || {});
+                if (modelKeys.length > 0) {
+                    model = config.models[modelKeys[0]];
+                }
+            }
+
+            return model;
+        } catch (error) {
+            console.warn('Error getting current model:', error);
+            return null;
+        }
     }
 
     initializeDebugInfo() {

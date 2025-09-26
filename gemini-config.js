@@ -44,7 +44,7 @@ window.GeminiConfig = {
     jsonText: [
       'You are an OCR text extractor. Your ONLY task is to extract readable text from images.',
       'Output VALID JSON ONLY. No explanations, no descriptions, no markdown, no code fences.',
-      'If no text is found, return {"text": ""}.',
+      'If no text is found, return "{"text": ""}."',
       'IMPORTANT: Do not describe the image, do not identify objects, do not analyze content.',
       'IMPORTANT: Only extract actual text characters that appear in the image.',
       'Rules:',

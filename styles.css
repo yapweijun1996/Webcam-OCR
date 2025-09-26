@@ -323,13 +323,15 @@ body {
 }
 
 .results-container {
-   background: var(--surface-elevated);
-   border-radius: var(--radius-lg);
-   padding: var(--space-lg);
-   box-shadow: var(--shadow-sm);
-   min-height: 200px;
-   max-height: 400px;
-   overflow-y: auto;
+    background: var(--surface-elevated);
+    border-radius: var(--radius-lg);
+    padding: var(--space-lg);
+    box-shadow: var(--shadow-md);
+    min-height: 300px;
+    max-height: 500px;
+    overflow-y: auto;
+    border: 2px solid var(--primary);
+    position: relative;
 }
 
 .results-list {
@@ -348,14 +350,34 @@ body {
 }
 
 @keyframes slideIn {
-  from { opacity: 0; transform: translateY(10px); }
-  to { opacity: 1; transform: translateY(0); }
+   from { opacity: 0; transform: translateY(10px); }
+   to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes highlightNew {
+   0% { background-color: rgba(16, 185, 129, 0.1); }
+   50% { background-color: rgba(16, 185, 129, 0.2); }
+   100% { background-color: transparent; }
 }
 
 .result-timestamp {
-  font-size: var(--font-size-sm);
-  color: var(--text-secondary);
-  font-weight: 500;
+   font-size: var(--font-size-sm);
+   color: var(--text-secondary);
+   font-weight: 500;
+}
+
+/* Confidence level indicators */
+.result-timestamp.high-confidence {
+   color: var(--success);
+   font-weight: 600;
+}
+
+.result-timestamp.medium-confidence {
+   color: var(--warning);
+}
+
+.result-timestamp.low-confidence {
+   color: var(--error);
 }
 
 .result-text {
