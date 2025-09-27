@@ -106,22 +106,49 @@ body {
 }
 
 .camera-section {
-    background-color: #000;
-    border-radius: var(--radius);
-    overflow: hidden;
-    position: sticky;
-    top: 80px;                 /* Account for header height */
-    aspect-ratio: 4 / 3;
-    z-index: 100;              /* Below header but above other content */
-    width: 100%;
-    max-width: 100%;           /* 防止溢出 */
-    box-sizing: border-box;
-  }
+  position: sticky;
+  top: calc(var(--header-offset, 72px) + env(safe-area-inset-top, 0px));
+  z-index: 900;                 /* Below header, above other content */
+  background: var(--surface);   /* Non-transparent to prevent "leak through" */
+  border-radius: var(--radius);
+  overflow: hidden;             /* Fallback */
+  overflow: clip;               /* Preferred for WebKit to enforce compositing clip (中文解释: 强制裁剪) */
+  aspect-ratio: 4 / 3;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  contain: paint;               /* Reduce repaints during scroll */
+  -webkit-mask-image: -webkit-radial-gradient(white, black); /* iOS/Safari correct clipping */
+}
+
+/* Inner frame owns the rounding + clips children; video only fills (中文解释: 视频只负责填充) */
+.camera-container {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  background: #000;             /* Seen before video plays; avoids seeing page behind */
+  overflow: hidden;
+}
 
 #cameraFeed {
   width: 100%;
   height: 100%;
+  display: block;
   object-fit: cover;
+  border-radius: inherit;       /* Compatibility only; real clip is on container */
+  transform: translateZ(0);
+  -webkit-transform: translateZ(0); /* Force GPU path on iOS to prevent flicker (中文解释: 开启硬件加速) */
+  backface-visibility: hidden;
+}
+
+/* Overlay sits above video but doesn't intercept clicks (中文解释: 允许点击穿透) */
+.camera-overlay {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 2;
 }
 
 .controls-section {

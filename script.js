@@ -835,7 +835,36 @@ document.addEventListener('DOMContentLoaded', () => {
   if (location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
     window.webcamOCR = app;
   }
-  
+
+  // Compute header height -> CSS var for sticky offset (prevents overlap/bleed on iOS)
+  const rootStyle = document.documentElement.style;
+
+  const setSafeAreaTop = () => {
+    try {
+      const el = document.createElement('div');
+      el.style.cssText = 'position:fixed;top:0;left:0;right:0;padding-top:env(safe-area-inset-top);visibility:hidden;pointer-events:none;';
+      document.body.appendChild(el);
+      const value = parseFloat(getComputedStyle(el).paddingTop) || 0;
+      rootStyle.setProperty('--safe-area-top', value + 'px');
+      el.remove();
+    } catch {
+      rootStyle.setProperty('--safe-area-top', '0px');
+    }
+  };
+
+  const updateHeaderOffset = () => {
+    const header = document.querySelector('.app-header');
+    const rect = header ? header.getBoundingClientRect() : { height: 64 };
+    const safeTop = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--safe-area-top')) || 0;
+    const offset = Math.round(rect.height + safeTop);
+    rootStyle.setProperty('--header-offset', offset + 'px');
+  };
+
+  setSafeAreaTop();
+  updateHeaderOffset();
+  window.addEventListener('resize', updateHeaderOffset, { passive: true });
+  window.addEventListener('orientationchange', () => { setSafeAreaTop(); updateHeaderOffset(); }, { passive: true });
+
   // Pass app instance to controller
   if (app.capture) {
     app.capture.app = app;
