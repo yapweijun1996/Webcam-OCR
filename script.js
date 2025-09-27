@@ -50,6 +50,7 @@ class UIManager {
       start: document.getElementById('startBtn'),
       stop: document.getElementById('stopBtn'),
       clear: document.getElementById('clearBtn'),
+      toggle: document.getElementById('toggleCameraBtn'),
       results: document.getElementById('resultsList'),
       processing: document.getElementById('processingIndicator'),
       errorBox: document.getElementById('errorMessage'),
@@ -101,6 +102,7 @@ class UIManager {
     if (!this.el.start || !this.el.stop) return;
     this.el.start.disabled = cameraActive;
     this.el.stop.disabled = !cameraActive;
+    if (this.el.toggle) this.el.toggle.disabled = !cameraActive;
     this.el.start.textContent = cameraActive ? 'Camera Active' : 'Start Camera';
     this.el.start.classList.toggle('btn-success', cameraActive);
   }
@@ -260,9 +262,12 @@ class CameraManager {
   constructor(ui) {
     this.ui = ui;
     this.stream = null;
+    this.currentFacing = U.isMobile() ? 'environment' : 'user';
+    this.currentDeviceId = null;
+    this._devicesCache = null;
   }
 
-  async start() {
+  async start(options = {}) {
     this.ui.setStatus('Starting camera...', 'warning');
 
     if (this.stream) return;
@@ -271,19 +276,22 @@ class CameraManager {
       throw new Error('Camera not supported in this browser');
     }
 
-    // 优先使用后置摄像头（移动设备），否则使用前置摄像头
-    const primaryFacingMode = U.isMobile() ? 'environment' : 'user';
-    const fallbackFacingMode = 'user'; // 前置摄像头作为备用
+    const preferredFacing = options.facing || this.currentFacing || (U.isMobile() ? 'environment' : 'user');
 
     const constraints = {
       video: {
         width: { ideal: U.isMobile() ? 640 : 1280, max: 1920 },
         height: { ideal: U.isMobile() ? 480 : 720, max: 1080 },
-        facingMode: { ideal: primaryFacingMode, exact: fallbackFacingMode },
         frameRate: { ideal: 30, max: 30 }
       },
       audio: false
     };
+
+    if (options.deviceId) {
+      constraints.video.deviceId = { exact: options.deviceId };
+    } else {
+      constraints.video.facingMode = { ideal: preferredFacing };
+    }
 
     this.stream = await navigator.mediaDevices.getUserMedia(constraints);
     this.ui.el.video.srcObject = this.stream;
@@ -301,6 +309,10 @@ class CameraManager {
         }.bind(this), 100);
       }
     });
+
+    // Remember what we used
+    this.currentFacing = preferredFacing;
+    this.currentDeviceId = options.deviceId || null;
 
     // Resize canvas
     this.ui.el.canvas.width = this.ui.el.video.videoWidth;
@@ -329,6 +341,43 @@ class CameraManager {
   }
 
   isActive() { return !!this.stream; }
+
+  async enumerateVideoDevices(force = false) {
+    if (this._devicesCache && !force) return this._devicesCache;
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const videos = devices.filter(d => d.kind === 'videoinput');
+    this._devicesCache = videos;
+    return videos;
+  }
+
+  async pickDeviceIdByFacing(facing = 'environment') {
+    try {
+      const videos = await this.enumerateVideoDevices(true);
+      const labelMatch = (label, facing) => {
+        label = (label || '').toLowerCase();
+        if (facing === 'environment') return /back|rear|environment/.test(label);
+        return /front|user|face/.test(label);
+      };
+      const labeled = videos.find(v => labelMatch(v.label, facing));
+      if (labeled) return labeled.deviceId;
+      if (videos.length === 2) {
+        return facing === 'environment' ? videos[1].deviceId : videos[0].deviceId;
+      }
+      return videos[0]?.deviceId || null;
+    } catch {
+      return null;
+    }
+  }
+
+  async toggleFacing() {
+    const target = this.currentFacing === 'environment' ? 'user' : 'environment';
+    const deviceId = await this.pickDeviceIdByFacing(target);
+
+    this.stop();
+    await this.start({ deviceId, facing: target });
+    this.currentFacing = target;
+    this.currentDeviceId = deviceId || null;
+  }
 
   captureJpeg(quality = 0.8) {
     if (!this.isActive()) return null;
@@ -667,6 +716,21 @@ class App {
     this.ui.el.stop?.addEventListener('click', () => {
       this.capture.stop();
       this.camera.stop();
+    });
+    this.ui.el.toggle?.addEventListener('click', async () => {
+      const wasRunning = !!(this.capture.asyncRunning || this.capture.intervalId);
+      this.capture.stop();
+      try {
+        this.ui.setStatus('Switching camera...', 'warning');
+        await this.camera.toggleFacing();
+        this.ui.setStatus('Camera switched', 'success');
+      } catch (e) {
+        this.ui.setStatus('Switch camera failed', 'error');
+        console.warn('Toggle camera error:', e);
+      }
+      if (wasRunning && this.camera.isActive()) {
+        this.capture.start();
+      }
     });
     this.ui.el.clear?.addEventListener('click', () => this.ui.clearResults());
 
