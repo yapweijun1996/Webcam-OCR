@@ -106,12 +106,14 @@ body {
 }
 
 .camera-section {
-  background-color: #000;
-  border-radius: var(--radius);
-  overflow: hidden;
-  position: relative;
-  aspect-ratio: 4 / 3;
-}
+   background-color: #000;
+   border-radius: var(--radius);
+   overflow: hidden;
+   position: sticky;
+   top: 80px;                 /* Account for header height */
+   aspect-ratio: 4 / 3;
+   z-index: 100;              /* Below header but above other content */
+ }
 
 #cameraFeed {
   width: 100%;
