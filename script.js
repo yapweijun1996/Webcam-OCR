@@ -271,11 +271,15 @@ class CameraManager {
       throw new Error('Camera not supported in this browser');
     }
 
+    // 优先使用后置摄像头（移动设备），否则使用前置摄像头
+    const primaryFacingMode = U.isMobile() ? 'environment' : 'user';
+    const fallbackFacingMode = 'user'; // 前置摄像头作为备用
+
     const constraints = {
       video: {
         width: { ideal: U.isMobile() ? 640 : 1280, max: 1920 },
         height: { ideal: U.isMobile() ? 480 : 720, max: 1080 },
-        facingMode: 'user',
+        facingMode: { ideal: primaryFacingMode, exact: fallbackFacingMode },
         frameRate: { ideal: 30, max: 30 }
       },
       audio: false
@@ -469,6 +473,9 @@ class CaptureController {
     this.intervalId = null;
     this.asyncRunning = false;
     this.throttleUntil = 0;
+    this.lastCaptureTime = 0;
+    this.consecutiveErrors = 0;
+    this.maxConsecutiveErrors = 3;
   }
 
   setMode(mode) { this.mode = mode; }
@@ -477,22 +484,66 @@ class CaptureController {
     if (this.intervalId) clearInterval(this.intervalId);
     this.intervalId = null;
     this.asyncRunning = false;
+    this.consecutiveErrors = 0; // 重置错误计数
     if (this.camera.isActive()) this.ui.setStatus('Camera active', 'success');
+  }
+
+  // 改进的异步循环逻辑
+  async runAsyncLoop() {
+    this.lastCaptureTime = Date.now();
+    this.consecutiveErrors = 0;
+
+    // 添加页面卸载监听，确保清理资源
+    const handlePageUnload = () => {
+      this.asyncRunning = false;
+    };
+    window.addEventListener('beforeunload', handlePageUnload);
+
+    try {
+      while (this.asyncRunning && this.camera.isActive()) {
+        try {
+          this.lastCaptureTime = Date.now();
+          await this.captureOnce(true);
+          this.consecutiveErrors = 0; // 成功时重置计数
+
+          // 动态间隔：基于处理时间调整，避免过度请求
+          const processingTime = Date.now() - this.lastCaptureTime;
+          const dynamicDelay = Math.max(1000, processingTime * 0.1);
+          await U.sleep(dynamicDelay);
+
+        } catch (error) {
+          this.consecutiveErrors++;
+          console.warn('Async capture error:', error);
+
+          // 错误退避策略：避免频繁错误时过度请求
+          if (this.consecutiveErrors >= this.maxConsecutiveErrors) {
+            this.ui.setStatus('Too many errors - pausing capture', 'error');
+            await U.sleep(5000); // 暂停5秒后重试
+            this.consecutiveErrors = 0; // 重置计数
+          } else {
+            // 递增延迟：1秒、2秒、3秒...
+            const backoffDelay = 1000 * this.consecutiveErrors;
+            await U.sleep(backoffDelay);
+          }
+        }
+      }
+    } finally {
+      // 清理事件监听器
+      window.removeEventListener('beforeunload', handlePageUnload);
+    }
   }
 
   async start() {
     if (!this.camera.isActive()) return;
     this.stop();
+
     if (this.mode === 'interval') {
       if (this.intervalId) return;
       this.intervalId = setInterval(() => this.captureOnce(false), 1000);
     } else {
       if (this.asyncRunning) return;
       this.asyncRunning = true;
-      while (this.asyncRunning && this.camera.isActive()) {
-        await this.captureOnce(true);
-        await U.sleep(1000);
-      }
+      this.runAsyncLoop(); // 启动异步循环，不等待
     }
     this.ui.setStatus('Auto-capture active', 'success');
   }

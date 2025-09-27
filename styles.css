@@ -106,14 +106,17 @@ body {
 }
 
 .camera-section {
-   background-color: #000;
-   border-radius: var(--radius);
-   overflow: hidden;
-   position: sticky;
-   top: 80px;                 /* Account for header height */
-   aspect-ratio: 4 / 3;
-   z-index: 100;              /* Below header but above other content */
- }
+    background-color: #000;
+    border-radius: var(--radius);
+    overflow: hidden;
+    position: sticky;
+    top: 80px;                 /* Account for header height */
+    aspect-ratio: 4 / 3;
+    z-index: 100;              /* Below header but above other content */
+    width: 100%;
+    max-width: 100%;           /* 防止溢出 */
+    box-sizing: border-box;
+  }
 
 #cameraFeed {
   width: 100%;
@@ -415,22 +418,48 @@ body {
 
 /* Desktop Layout */
 @media (min-width: 768px) {
-  .main-content {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    grid-template-rows: auto 1fr;
-    gap: var(--spacing);
-  }
-  .camera-section {
-    grid-column: 1 / -1;
-  }
-  .controls-section {
-    grid-column: 1;
-  }
-  .results-section {
-    grid-column: 2;
-  }
-  .control-buttons {
-    grid-template-columns: 1fr 1fr;
-  }
+   .main-content {
+     display: grid;
+     grid-template-columns: 1fr 1fr;
+     grid-template-rows: minmax(300px, auto) 1fr;
+     gap: var(--spacing);
+     align-items: start;
+     min-height: calc(100vh - 140px); /* 减去header和footer高度 */
+   }
+
+   .camera-section {
+     grid-column: 1 / -1;
+     max-height: 500px;          /* 限制摄像头区域最大高度 */
+     width: 100%;
+     min-height: 300px;          /* 最小高度保证 */
+   }
+
+   .controls-section {
+     grid-column: 1;
+     min-width: 0;               /* 防止网格溢出 */
+     max-height: 70vh;           /* 限制控制面板高度 */
+     overflow-y: auto;           /* 允许内部滚动 */
+   }
+
+   .results-section {
+     grid-column: 2;
+     min-width: 0;               /* 防止网格溢出 */
+     max-height: 70vh;           /* 限制结果面板高度 */
+   }
+
+   .results-container {
+     max-height: 60vh;           /* 限制结果容器高度 */
+     overflow-y: auto;
+   }
+
+   .control-buttons {
+     grid-template-columns: 1fr 1fr;
+   }
+ }
+
+/* Large Desktop Layout */
+@media (min-width: 1200px) {
+   .camera-section {
+     max-height: 600px;          /* 大屏幕上允许更大摄像头区域 */
+   }
 }

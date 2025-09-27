@@ -50,6 +50,7 @@ graph TB
 ### 📱 User Experience
 - **Auto-start**: Camera and OCR begin automatically when page loads
 - **Mobile Responsive**: Optimized for both desktop and mobile devices
+- **Smart Camera Selection**: Mobile devices automatically use back camera (environment) for better OCR results, desktop uses front camera (user)
 - **Real-time Feedback**: Live status updates and processing indicators
 - **Debug Panel**: Development debugging information (localhost only)
 - **Keyboard Shortcuts**: ESC to stop camera, visual feedback
