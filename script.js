@@ -62,6 +62,21 @@ class UIManager {
       debugVideoSize: document.getElementById('debugVideoSize'),
       topLoader: document.getElementById('topLoader'),
       footer: document.querySelector('.app-footer p'),
+      // Token usage elements
+      tokenUsageSection: document.getElementById('tokenUsageSection'),
+      inputTokens: document.getElementById('inputTokens'),
+      outputTokens: document.getElementById('outputTokens'),
+      totalTokens: document.getElementById('totalTokens'),
+      inputCost: document.getElementById('inputCost'),
+      outputCost: document.getElementById('outputCost'),
+      totalCost: document.getElementById('totalCost'),
+    };
+    this.tokenUsage = {
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      totalInputCost: 0,
+      totalOutputCost: 0,
+      sessionStartTime: Date.now()
     };
   }
 
@@ -180,6 +195,64 @@ class UIManager {
     if (this.el.debugStream) this.el.debugStream.textContent = streamActive ? '✅ Active' : '❌ Inactive';
     if (this.el.debugVideoSize) this.el.debugVideoSize.textContent = streamActive ? `${videoWidth}x${videoHeight}` : 'N/A';
   }
+
+  // Token usage and cost tracking methods
+  showTokenUsageSection() {
+    if (this.el.tokenUsageSection) {
+      this.el.tokenUsageSection.style.display = 'block';
+    }
+  }
+
+  hideTokenUsageSection() {
+    if (this.el.tokenUsageSection) {
+      this.el.tokenUsageSection.style.display = 'none';
+    }
+  }
+
+  updateTokenUsage(inputTokens, outputTokens, modelName) {
+    const CFG = window.GeminiConfig || {};
+    const inputCost = CFG.tokenEstimation?.calculateCost(inputTokens, true, modelName) || 0;
+    const outputCost = CFG.tokenEstimation?.calculateCost(outputTokens, false, modelName) || 0;
+    const totalCost = inputCost + outputCost;
+
+    // Update session totals
+    this.tokenUsage.totalInputTokens += inputTokens;
+    this.tokenUsage.totalOutputTokens += outputTokens;
+    this.tokenUsage.totalInputCost += inputCost;
+    this.tokenUsage.totalOutputCost += outputCost;
+
+    // Update display
+    this.updateTokenDisplay();
+  }
+
+  updateTokenDisplay() {
+    const { totalInputTokens, totalOutputTokens, totalInputCost, totalOutputCost } = this.tokenUsage;
+    const totalTokens = totalInputTokens + totalOutputTokens;
+    const totalCostValue = totalInputCost + totalOutputCost;
+
+    if (this.el.inputTokens) this.el.inputTokens.textContent = totalInputTokens.toLocaleString();
+    if (this.el.outputTokens) this.el.outputTokens.textContent = totalOutputTokens.toLocaleString();
+    if (this.el.totalTokens) this.el.totalTokens.textContent = totalTokens.toLocaleString();
+
+    if (this.el.inputCost) this.el.inputCost.textContent = `$${totalInputCost.toFixed(6)}`;
+    if (this.el.outputCost) this.el.outputCost.textContent = `$${totalOutputCost.toFixed(6)}`;
+    if (this.el.totalCost) this.el.totalCost.textContent = `$${totalCostValue.toFixed(6)}`;
+  }
+
+  resetTokenUsage() {
+    this.tokenUsage = {
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      totalInputCost: 0,
+      totalOutputCost: 0,
+      sessionStartTime: Date.now()
+    };
+    this.updateTokenDisplay();
+  }
+
+  getSessionDuration() {
+    return Math.floor((Date.now() - this.tokenUsage.sessionStartTime) / 1000);
+  }
 }
 
 /* ========== Camera Manager ========== */
@@ -231,6 +304,7 @@ class CameraManager {
 
     this.ui.setStatus('Camera active', 'success');
     this.ui.setButtons(true);
+    this.ui.showTokenUsageSection(); // Show token usage when camera starts
     this.ui.updateDebug({
       streamActive: true,
       videoWidth: this.ui.el.video.videoWidth,
@@ -246,6 +320,7 @@ class CameraManager {
     this.ui.setStatus('Camera stopped', 'warning');
     this.ui.setButtons(false);
     this.ui.hideOverlay();
+    this.ui.hideTokenUsageSection(); // Hide token usage when camera stops
     this.ui.updateDebug({ streamActive: false, videoWidth: 0, videoHeight: 0 });
   }
 
@@ -365,13 +440,22 @@ class OCRService {
     }
 
     // 统一使用非流式解析
-    const json = await response.json();
-    const raw = json?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-    const text = raw || (typeof json?.candidates?.[0]?.content?.parts?.[0] === 'string'
-      ? json.candidates[0].content.parts[0]
-      : json?.candidates?.[0]?.content?.parts?.[0]?.text || '');
+     const json = await response.json();
+     const raw = json?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+     const text = raw || (typeof json?.candidates?.[0]?.content?.parts?.[0] === 'string'
+       ? json.candidates[0].content.parts[0]
+       : json?.candidates?.[0]?.content?.parts?.[0]?.text || '');
 
-    return { text: this.parseTextValue(text || ''), meta: json || {} };
+     // Extract token usage from response metadata
+     const usage = json?.usageMetadata || {};
+     const inputTokens = usage.promptTokenCount || 0;
+     const outputTokens = usage.candidatesTokenCount || usage.responseTokenCount || 0;
+
+     return {
+       text: this.parseTextValue(text || ''),
+       meta: json || {},
+       tokenUsage: { inputTokens, outputTokens }
+     };
   }
 }
 
@@ -431,7 +515,14 @@ class CaptureController {
 
       const base64 = U.extractBase64(dataUrl);
 
-      const { text, meta } = await this.ocr.request(base64);
+      const { text, meta, tokenUsage } = await this.ocr.request(base64);
+
+      // Update token usage if available
+      if (tokenUsage && this.ui.showTokenUsageSection) {
+        const model = this.ocr.getModel();
+        const modelName = model?.name || 'gemini-2.5-flash-lite';
+        this.ui.updateTokenUsage(tokenUsage.inputTokens, tokenUsage.outputTokens, modelName);
+      }
 
       // Trim and clean the OCR result
       const cleanedText = this.app.cleanOcrResult(text);

@@ -101,5 +101,79 @@ window.GeminiConfig = {
       if (schema === 'lines') return { lines: [] };
       if (schema === 'pages') return { pages: [] };
     }
+  },
+
+  // Pricing configuration for cost estimation
+  pricing: {
+    'gemini-2.5-flash-lite': {
+      inputTokenPrice: 0.10,    // per 1M tokens
+      outputTokenPrice: 0.40,   // per 1M tokens
+      inputTypes: {
+        text: 0.10,
+        image: 0.10,
+        video: 0.10,
+        audio: 0.30
+      },
+      outputTypes: {
+        text: 0.40
+      }
+    },
+    'gemini-2.5-flash': {
+      inputTokenPrice: 0.15,    // per 1M tokens
+      outputTokenPrice: 0.60,   // per 1M tokens (non-thinking mode)
+      thinkingOutputPrice: 3.50, // per 1M tokens (thinking mode)
+      inputTypes: {
+        text: 0.15,
+        image: 0.15,
+        video: 0.15,
+        audio: 1.00
+      },
+      outputTypes: {
+        text: 0.60,
+        thinking: 3.50
+      }
+    }
+  },
+
+  // Token estimation helpers
+  tokenEstimation: {
+    // Estimate image tokens (rough approximation)
+    estimateImageTokens(base64Image) {
+      try {
+        // Remove data URL prefix to get actual base64
+        const base64 = base64Image.split(',')[1] || base64Image;
+        const imageSizeBytes = Math.ceil(base64.length * 0.75); // base64 to bytes
+        // Rough estimation: ~85 tokens per 100 bytes for images
+        return Math.ceil(imageSizeBytes / 100 * 85);
+      } catch {
+        return 1700; // fallback estimation
+      }
+    },
+
+    // Estimate text tokens (rough approximation)
+    estimateTextTokens(text) {
+      if (!text) return 0;
+      // Rough estimation: ~4 characters per token
+      return Math.ceil(text.length / 4);
+    },
+
+    // Calculate cost based on tokens and model
+    calculateCost(tokens, isInput, modelName, isThinking = false) {
+      const pricing = window.GeminiConfig.pricing[modelName];
+      if (!pricing) return 0;
+
+      let pricePerToken;
+      if (isInput) {
+        pricePerToken = pricing.inputTokenPrice / 1000000; // convert to per token
+      } else {
+        if (isThinking && pricing.thinkingOutputPrice) {
+          pricePerToken = pricing.thinkingOutputPrice / 1000000;
+        } else {
+          pricePerToken = pricing.outputTokenPrice / 1000000;
+        }
+      }
+
+      return tokens * pricePerToken;
+    }
   }
 };

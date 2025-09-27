@@ -49,6 +49,44 @@
                         </select>
                     </div>
 
+                    <!-- Token Usage & Cost Estimation -->
+                    <div class="control-group" id="tokenUsageSection" style="display: none;">
+                        <label>Token Usage & Cost</label>
+                        <div class="token-usage-display">
+                            <div class="usage-stats">
+                                <div class="stat-item">
+                                    <span class="stat-label">Input Tokens:</span>
+                                    <span class="stat-value" id="inputTokens">0</span>
+                                </div>
+                                <div class="stat-item">
+                                    <span class="stat-label">Output Tokens:</span>
+                                    <span class="stat-value" id="outputTokens">0</span>
+                                </div>
+                                <div class="stat-item">
+                                    <span class="stat-label">Total Tokens:</span>
+                                    <span class="stat-value" id="totalTokens">0</span>
+                                </div>
+                            </div>
+                            <div class="cost-breakdown">
+                                <div class="cost-item">
+                                    <span class="cost-label">Input Cost:</span>
+                                    <span class="cost-value" id="inputCost">$0.0000</span>
+                                </div>
+                                <div class="cost-item">
+                                    <span class="cost-label">Output Cost:</span>
+                                    <span class="cost-value" id="outputCost">$0.0000</span>
+                                </div>
+                                <div class="cost-item total-cost">
+                                    <span class="cost-label">Total Cost:</span>
+                                    <span class="cost-value" id="totalCost">$0.0000</span>
+                                </div>
+                            </div>
+                            <div class="cost-info">
+                                <small>Pricing per 1M tokens • Updates after each OCR request</small>
+                            </div>
+                        </div>
+                    </div>
+
                     <div class="control-group">
                         <label>Capture Mode</label>
                         <div class="radio-group">
